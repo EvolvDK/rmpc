@@ -1,0 +1,101 @@
+[package]
+name = "rmpc"
+version = "0.10.0"
+edition = "2024"
+license = "BSD-3-Clause"
+description = "A beautiful and configurable TUI client for MPD"
+homepage = "https://mierak.github.io/rmpc/"
+repository = "https://github.com/mierak/rmpc"
+readme = "README.md"
+rust-version = "1.88.0"
+exclude = ["/docs/**/*", "!/docs/src/content/docs/next/assets/example_theme.ron", "!/docs/src/content/docs/next/assets/example_config.ron"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { workspace = true }
+anyhow = "1.0.98"
+bon = "3.6.4"
+base64 = "0.22.1"
+crossterm = { version = "0.28.1", features = ["serde"] }
+csv = "1.3.0"
+image = "0.25.6"
+ratatui = { version = "0.29.0", features = ["all-widgets"] }
+strum = { workspace = true }
+flate2 = { version = "1.1.2" }
+itertools = "0.14.0"
+fuzzy-matcher = "0.3.7"
+ron = "0.10.1"
+derive_more = { version = "2.0.1", features = ["into_iterator", "into", "as_ref", "into_iterator", "display", "deref", "debug"] }
+rustix = { version = "1.0.7", features = ["termios", "fs", "stdio", "process"] }
+bitflags = { version = "2.9.1", features = ["serde"] }
+log = { version = "0.4.27", features = ["kv"] }
+flexi_logger = "0.31.1"
+chrono = { version = "0.4.41", features = ["serde"] }
+serde = { workspace = true }
+serde_with = "3.13.0"
+either = "1.15.0"
+walkdir = "2.5.0"
+which = "8.0.0"
+url = "2.5.4"
+sysinfo = "0.36.1"
+color_quant = "1.1.0"
+dirs = "6.0.0"
+enum-map = "2.7.3"
+textwrap = "0.16.2"
+tui-input = "0.14.0"
+crossbeam = "0.8.4"
+once_cell = "1.19.0"
+notify-debouncer-full = "0.6.0"
+unicode-width = "=0.2.0"
+unicase = "2.8.1"
+serde_path_to_error = "0.1.17"
+serde_json = "1.0.140"
+rand = "0.9.1"
+ansi_colours = "1"
+thiserror = "2.0.12"
+parking_lot = { version = "0.12.4", features = [] }
+unicode-segmentation = "1.12.0"
+tokio = { version = "1.38.0", features = ["process", "rt-multi-thread", "macros", "io-util", "time"] }
+
+[build-dependencies]
+clap = { workspace = true }
+strum = { workspace = true }
+serde = { workspace = true }
+clap_complete = "4.5.54"
+clap_mangen = "0.2.27"
+vergen-gitcl = { version = "1.0.8", features = ["build"] }
+anyhow = "1.0.98"
+
+[dev-dependencies]
+rstest = "0.25.0"
+test-case = "3.3.1"
+
+[workspace.dependencies]
+clap = { version = "4.5.40", features = ["derive", "cargo", "string" ] }
+strum = { version = "0.27.1", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+single_match = "allow"
+type_complexity = "allow"
+module_name_repetitions = "allow"
+unused_self = "allow"
+unnested_or_patterns = "allow"
+match_same_arms = "allow"
+manual_let_else = "allow"
+needless_return = "allow"
+zero_sized_map_values = "allow"
+too_many_lines = "allow"
+match_single_binding = "allow"
+struct_field_names = "allow"
+redundant_closure_for_method_calls = "allow"
+unwrap_used = "deny"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+cast_sign_loss = "allow"
+
+[lints.rust]
+unused_macros = "allow"
