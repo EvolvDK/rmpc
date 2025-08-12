@@ -638,6 +638,11 @@ impl<'ui> Ui<'ui> {
                     client.add_tag_id(song_id, Tag::Title, &video.title)?;
                     client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                     client.add_tag_id(song_id, Tag::Album, "YouTube")?;
+
+                    if context.play_after_refresh {
+                        client.play_id(song_id)?;
+                    }
+
                     Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
                 });
             status_info!("Refreshed '{}' in queue", title);
@@ -705,47 +710,6 @@ impl<'ui> Ui<'ui> {
             }
         }
         Ok(ctx.render()?)
-    }
-
-    pub fn handle_playback_error(
-        &mut self,
-        song_id: u32,
-        _error_msg: &str,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        if let Some(video) = ctx.youtube_song_map.get(&song_id).cloned() {
-            let position = ctx
-                .queue
-                .iter()
-                .position(|s| s.id == song_id)
-                .context("Failed to find failed song in queue")?;
-
-            let modal = menu::modal::MenuModal::new(ctx).list_section(ctx, |section| {
-                    Some(
-                        section
-                            .item(
-                                format!("Yes, refresh '{}'", video.title),
-                                move |ctx| {
-                                    let context = Some(crate::shared::events::RefreshContext {
-                                        old_song_id: song_id,
-                                        position,
-                                    });
-                                    ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                                        video,
-                                        context,
-                                    })?;
-                                    Ok(())
-                                },
-                            )
-                            .item("No, cancel", |_| Ok(())),
-                    )
-                })
-                .build();
-
-            modal!(ctx, modal);
-            ctx.render()?;
-        }
-        Ok(())
     }
 
     pub fn on_youtube_library_remove_video(&mut self, video_id: &str, ctx: &mut Ctx) -> Result<()> {

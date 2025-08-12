@@ -27,6 +27,7 @@ use crate::{
 pub(crate) struct RefreshContext {
     pub old_song_id: u32,
     pub position: usize,
+    pub play_after_refresh: bool,
 }
 
 #[derive(Debug)]

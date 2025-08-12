@@ -466,21 +466,6 @@ fn main_task<B: Backend + std::io::Write>(
                     WorkDone::None => {}
                 },
                 AppEvent::WorkDone(Err(err)) => {
-                    if let Some(MpdError::Mpd(MpdFailureResponse { command, message, .. })) =
-                        err.downcast_ref::<MpdError>()
-                    {
-                        if *command == "playid" && message.starts_with("Failed to decode") {
-                            // This is our expired URL error. We get the song ID from the current
-                            // status (the song we TRIED to play) and call the handler directly.
-                            if let Some(song_id) = ctx.status.songid {
-                                if let Err(e) = ui.handle_playback_error(song_id, message, &mut ctx)
-                                {
-                                    log::error!(error:? = e; "Failed to handle playback error");
-                                }
-                            }
-                            continue; // We don't want to display the raw error.
-                        }
-                    }
                     status_error!("{}", err);
                 }
                 AppEvent::Resized { columns, rows } => {
