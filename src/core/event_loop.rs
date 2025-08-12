@@ -15,7 +15,6 @@ use crate::{
     mpd::{
         commands::{IdleEvent, State},
         mpd_client::{MpdClient, SaveMode},
-        errors::{MpdError, MpdFailureResponse},
     },
     shared::{
         events::{AppEvent, WorkDone},
@@ -292,15 +291,6 @@ fn main_task<B: Backend + std::io::Write>(
                             let current_updating_db = ctx.status.updating_db;
                             let current_playlist = ctx.status.lastloadedplaylist.take();
                             let previous_status = std::mem::replace(&mut ctx.status, status);
-                            if let (Some(error_msg), Some(song_id)) =
-                                (ctx.status.error.clone(), previous_status.songid)
-                            {
-                                if let Err(e) =
-                                    ui.handle_playback_error(song_id, &error_msg, &mut ctx)
-                                {
-                                    log::error!(error:? = e; "Failed to handle playback error");
-                                }
-                            }
                             let new_playlist = ctx.status.lastloadedplaylist.as_ref();
                             let mut song_changed = false;
 

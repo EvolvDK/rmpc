@@ -14,6 +14,7 @@ use ratatui::{
 
 use super::{CommonAction, Pane};
 use crate::{
+    shared::events::WorkRequest,
     MpdQueryResult,
     config::{
         keys::{
@@ -846,38 +847,38 @@ impl Pane for QueuePane {
                     );
                 }
                 QueueActions::Play => {
-                    if let Some(selected_song) =
-                        self.scrolling_state.get_selected().and_then(|idx| ctx.queue.get(idx).cloned())
-                    {
-                        if let Some(video) = ctx.youtube_song_map.get(&selected_song.id) {
-                            // It's a YouTube video, dispatch a work request to refresh URL and play
-                            let context = Some(crate::shared::events::RefreshContext {
-                                old_song_id: selected_song.id,
-                                position: selected_song.pos as usize,
-                                play_after_refresh: true,
-                            });
-                            if let Err(e) = ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                                video: video.clone(),
-                                context,
-                            }) {
-                                status_error!("Failed to send work request: {}", e);
-                            } else {
-                                status_info!("Refreshing and playing '{}'...", video.title);
-                            }
-                        } else {
-                            // It's a local file, play it directly
-                            let id = selected_song.id;
-                            ctx.query()
-                                .id(GLOBAL_STATUS_UPDATE)
-                                .replace_id("play_and_get_status")
-                                .query(move |client| {
-                                    client.play_id(id)?;
-                                    let status = client.get_status()?;
-                                    Ok(MpdQueryResult::Status {
-                                        data: status,
-                                        source_event: None,
-                                    })
+                    if let Some(idx) = self.scrolling_state.get_selected() {
+                        if let Some(selected_song) = ctx.queue.get(idx).cloned() {
+                            if let Some(video) = ctx.youtube_song_map.get(&selected_song.id) {
+                                // It's a YouTube video, dispatch a work request to refresh URL and play
+                                let context = Some(crate::shared::events::RefreshContext {
+                                    old_song_id: selected_song.id,
+                                    position: idx,
+                                    play_after_refresh: true,
                                 });
+                                if let Err(e) = ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
+                                    video: video.clone(),
+                                    context,
+                                }) {
+                                    status_error!("Failed to send work request: {}", e);
+                                } else {
+                                    status_info!("Refreshing and playing '{}'...", video.title);
+                                }
+                            } else {
+                                // It's a local file, play it directly
+                                let id = selected_song.id;
+                                ctx.query()
+                                    .id(GLOBAL_STATUS_UPDATE)
+                                    .replace_id("play_and_get_status")
+                                    .query(move |client| {
+                                        client.play_id(id)?;
+                                        let status = client.get_status()?;
+                                        Ok(MpdQueryResult::Status {
+                                            data: status,
+                                            source_event: None,
+                                        })
+                                    });
+                            }
                         }
                     }
                 }
