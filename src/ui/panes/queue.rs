@@ -213,7 +213,9 @@ impl QueuePane {
                         .queue
                         .iter()
                         .map(|song| {
-                            if let Some(video_id) = song.stickers.get("rmpc_yt_id") {
+                            if let Some(video_id) =
+                                song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id"))
+                            {
                                 crate::youtube::storage::PlaylistItem::Youtube {
                                     id: video_id.clone(),
                                 }
@@ -264,7 +266,9 @@ impl QueuePane {
                                     .queue
                                     .iter()
                                     .map(|song| {
-                                        if let Some(video_id) = song.stickers.get("rmpc_yt_id") {
+                                        if let Some(video_id) =
+                                            song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id"))
+                                        {
                                             crate::youtube::storage::PlaylistItem::Youtube {
                                                 id: video_id.clone(),
                                             }
@@ -849,7 +853,9 @@ impl Pane for QueuePane {
                 QueueActions::Play => {
                     if let Some(idx) = self.scrolling_state.get_selected() {
                         if let Some(selected_song) = ctx.queue.get(idx).cloned() {
-                            if let Some(video_id) = selected_song.stickers.get("rmpc_yt_id") {
+                            if let Some(video_id) =
+                                selected_song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id"))
+                            {
                                 let video = crate::youtube::YouTubeVideo {
                                     id: video_id.clone(),
                                     title: selected_song
@@ -860,7 +866,10 @@ impl Pane for QueuePane {
                                         .metadata
                                         .get("artist")
                                         .map_or_else(String::new, |t| t.first().to_string()),
-                                    duration: selected_song.duration.unwrap_or_default(),
+                                    duration: selected_song
+                                        .duration
+                                        .unwrap_or_default()
+                                        .as_secs_f64(),
                                     thumbnail: String::new(),
                                 };
                                 // It's a YouTube video, dispatch a work request to refresh URL and play

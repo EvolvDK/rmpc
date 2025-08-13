@@ -1,6 +1,6 @@
 use std::{
     cell::Cell,
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     ops::AddAssign,
     time::{Duration, Instant},
 };

@@ -428,15 +428,6 @@ fn main_task<B: Backend + std::io::Write>(
                         }
                         ("global_queue_update", None, MpdQueryResult::Queue(queue)) => {
                             ctx.queue = queue.unwrap_or_default();
-                            let queue_song_ids: HashSet<u32> =
-                                ctx.queue.iter().map(|s| s.id).collect();
-                            ctx.youtube_song_map
-                                .retain(|song_id, _| queue_song_ids.contains(song_id));
-                            if let Err(e) =
-                                crate::youtube::storage::save_youtube_song_map(&ctx.youtube_song_map)
-                            {
-                                log::error!(error:? = e; "Failed to save YouTube song map");
-                            }
                             render_wanted = true;
                         }
                         (
