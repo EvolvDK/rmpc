@@ -638,7 +638,11 @@ impl<'ui> Ui<'ui> {
                     client.add_tag_id(song_id, Tag::Title, &video.title)?;
                     client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                     client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                    client.add_tag_id(song_id, Tag::Custom("rmpc_yt_id".into()), &video.id)?;
+                    client.add_tag_id(
+                        song_id,
+                        Tag::Comment,
+                        &format!("rmpc_yt_id={}", video.id),
+                    )?;
 
                     if context.play_after_refresh {
                         client.play_id(song_id)?;
@@ -657,7 +661,11 @@ impl<'ui> Ui<'ui> {
                 client.add_tag_id(song_id, Tag::Title, &video.title)?;
                 client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                 client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                client.add_tag_id(song_id, Tag::Custom("rmpc_yt_id".into()), &video.id)?;
+                client.add_tag_id(
+                    song_id,
+                    Tag::Comment,
+                    &format!("rmpc_yt_id={}", video.id),
+                )?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
             status_info!("Added '{}' to queue", title);
@@ -758,10 +766,12 @@ impl<'ui> Ui<'ui> {
             } else {
                 match &item {
                     PlaylistItem::Local { path } => ctx.queue.iter().any(|s| s.file == *path),
-                    PlaylistItem::Youtube { id } => ctx
-                        .queue
-                        .iter()
-                        .any(|s| s.metadata.get("rmpc_yt_id").is_some_and(|v| v.first() == id)),
+                    PlaylistItem::Youtube { id } => ctx.queue.iter().any(|s| {
+                        s.metadata
+                            .get("Comment")
+                            .and_then(|tag| tag.first().strip_prefix("rmpc_yt_id="))
+                            .is_some_and(|found_id| found_id == id)
+                    }),
                 }
             };
 
@@ -937,10 +947,10 @@ impl<'ui> Ui<'ui> {
             .queue
             .iter()
             .map(|song| {
-                if let Some(tag_value) = song.metadata.get("rmpc_yt_id") {
-                    crate::youtube::storage::PlaylistItem::Youtube {
-                        id: tag_value.first().to_string(),
-                    }
+                if let Some(id) =
+                    song.metadata.get("Comment").and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
+                {
+                    crate::youtube::storage::PlaylistItem::Youtube { id: id.to_string() }
                 } else {
                     crate::youtube::storage::PlaylistItem::Local { path: song.file.clone() }
                 }

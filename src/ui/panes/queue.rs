@@ -213,10 +213,12 @@ impl QueuePane {
                         .queue
                         .iter()
                         .map(|song| {
-                            if let Some(tag_value) = song.metadata.get("rmpc_yt_id") {
-                                crate::youtube::storage::PlaylistItem::Youtube {
-                                    id: tag_value.first().to_string(),
-                                }
+                            if let Some(id) = song
+                                .metadata
+                                .get("Comment")
+                                .and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
+                            {
+                                crate::youtube::storage::PlaylistItem::Youtube { id: id.to_string() }
                             } else {
                                 crate::youtube::storage::PlaylistItem::Local {
                                     path: song.file.clone(),
@@ -264,9 +266,11 @@ impl QueuePane {
                                     .queue
                                     .iter()
                                     .map(|song| {
-                                        if let Some(tag_value) = song.metadata.get("rmpc_yt_id") {
+                                        if let Some(id) = song.metadata.get("Comment").and_then(|t| {
+                                            t.first().strip_prefix("rmpc_yt_id=")
+                                        }) {
                                             crate::youtube::storage::PlaylistItem::Youtube {
-                                                id: tag_value.first().to_string(),
+                                                id: id.to_string(),
                                             }
                                         } else {
                                             crate::youtube::storage::PlaylistItem::Local {
@@ -849,8 +853,11 @@ impl Pane for QueuePane {
                 QueueActions::Play => {
                     if let Some(idx) = self.scrolling_state.get_selected() {
                         if let Some(selected_song) = ctx.queue.get(idx).cloned() {
-                            if let Some(tag_value) = selected_song.metadata.get("rmpc_yt_id") {
-                                let video_id = tag_value.first();
+                            if let Some(video_id) = selected_song
+                                .metadata
+                                .get("Comment")
+                                .and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
+                            {
                                 let video = crate::youtube::YouTubeVideo {
                                     id: video_id.to_string(),
                                     title: selected_song
