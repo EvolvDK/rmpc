@@ -735,8 +735,6 @@ impl<'ui> Ui<'ui> {
                 client.clear()?;
                 Ok(())
             });
-            // When replacing, we clear the youtube_song_map as well to ensure consistency.
-            ctx.youtube_song_map.clear();
         }
 
         let library_videos: HashMap<String, YouTubeVideo> =

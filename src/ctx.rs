@@ -41,7 +41,6 @@ pub struct Ctx {
     pub(crate) config: std::sync::Arc<Config>,
     pub(crate) status: Status,
     pub(crate) queue: Vec<Song>,
-    pub(crate) youtube_song_map: HashMap<u32, crate::youtube::YouTubeVideo>,
     pub(crate) active_tab: TabName,
     pub(crate) supported_commands: HashSet<String>,
     pub(crate) db_update_start: Option<Instant>,
@@ -86,10 +85,6 @@ impl Ctx {
         let status = client.get_status()?;
         let queue = client.playlist_info(sticker_support_needed)?.unwrap_or_default();
 
-        let mut youtube_song_map = crate::youtube::storage::load_youtube_song_map()?;
-        let queue_song_ids: HashSet<u32> = queue.iter().map(|s| s.id).collect();
-        youtube_song_map.retain(|song_id, _| queue_song_ids.contains(song_id));
-
         if !supported_commands.contains("albumart") || !supported_commands.contains("readpicture") {
             config.album_art.method = ImageMethod::None;
             status_warn!("Album art is disabled because it is not supported by MPD");
@@ -104,7 +99,6 @@ impl Ctx {
             config: std::sync::Arc::new(config),
             status,
             queue,
-            youtube_song_map,
             active_tab,
             supported_commands,
             db_update_start: None,
