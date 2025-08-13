@@ -653,6 +653,18 @@ impl<'ui> Ui<'ui> {
             status_info!("Refreshed '{}' in queue", title);
         } else {
             // This is a new song
+            let already_in_queue = ctx.queue.iter().any(|s| {
+                s.metadata
+                    .get("Comment")
+                    .and_then(|tag| tag.first().strip_prefix("rmpc_yt_id="))
+                    .is_some_and(|found_id| found_id == video.id)
+            });
+
+            if already_in_queue {
+                status_warn!("'{}' est déjà dans la file d'attente.", title);
+                return Ok(ctx.render()?);
+            }
+
             ctx.query().id("add_youtube_song").query(move |client| {
                 let song_id = client
                     .add_id(&url, None)?
@@ -766,12 +778,7 @@ impl<'ui> Ui<'ui> {
             } else {
                 match &item {
                     PlaylistItem::Local { path } => ctx.queue.iter().any(|s| s.file == *path),
-                    PlaylistItem::Youtube { id } => ctx.queue.iter().any(|s| {
-                        s.metadata
-                            .get("Comment")
-                            .and_then(|tag| tag.first().strip_prefix("rmpc_yt_id="))
-                            .is_some_and(|found_id| found_id == id)
-                    }),
+                    PlaylistItem::Youtube { .. } => false, // Handled by the centralized check
                 }
             };
 

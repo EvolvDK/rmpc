@@ -201,21 +201,11 @@ impl YouTubePane {
 
     fn add_selected_video_to_queue(&self, ctx: &mut Ctx) -> Result<()> {
         if let Some(video) = self.get_selected_video() {
-            let already_in_queue = ctx.queue.iter().any(|s| {
-                s.metadata
-                    .get("Comment")
-                    .and_then(|tag| tag.first().strip_prefix("rmpc_yt_id="))
-                    .is_some_and(|found_id| found_id == video.id)
-            });
-            if already_in_queue {
-                status_info!("'{}' is already in the queue", video.title);
-            } else {
-                status_info!("Fetching stream URL for '{}'...", video.title);
-                ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                    video: video.clone(),
-                    context: None,
-                })?;
-            }
+            status_info!("Fetching stream URL for '{}'...", video.title);
+            ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
+                video: video.clone(),
+                context: None,
+            })?;
             ctx.render()?;
         }
         Ok(())
