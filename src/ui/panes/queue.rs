@@ -213,9 +213,9 @@ impl QueuePane {
                         .queue
                         .iter()
                         .map(|song| {
-                            if let Some(video) = ctx.youtube_song_map.get(&song.id) {
+                            if let Some(video_id) = song.stickers.get("rmpc_yt_id") {
                                 crate::youtube::storage::PlaylistItem::Youtube {
-                                    id: video.id.clone(),
+                                    id: video_id.clone(),
                                 }
                             } else {
                                 crate::youtube::storage::PlaylistItem::Local {
@@ -264,9 +264,9 @@ impl QueuePane {
                                     .queue
                                     .iter()
                                     .map(|song| {
-                                        if let Some(video) = ctx.youtube_song_map.get(&song.id) {
+                                        if let Some(video_id) = song.stickers.get("rmpc_yt_id") {
                                             crate::youtube::storage::PlaylistItem::Youtube {
-                                                id: video.id.clone(),
+                                                id: video_id.clone(),
                                             }
                                         } else {
                                             crate::youtube::storage::PlaylistItem::Local {
@@ -849,7 +849,20 @@ impl Pane for QueuePane {
                 QueueActions::Play => {
                     if let Some(idx) = self.scrolling_state.get_selected() {
                         if let Some(selected_song) = ctx.queue.get(idx).cloned() {
-                            if let Some(video) = ctx.youtube_song_map.get(&selected_song.id) {
+                            if let Some(video_id) = selected_song.stickers.get("rmpc_yt_id") {
+                                let video = crate::youtube::YouTubeVideo {
+                                    id: video_id.clone(),
+                                    title: selected_song
+                                        .metadata
+                                        .get("title")
+                                        .map_or_else(String::new, |t| t.first().to_string()),
+                                    channel: selected_song
+                                        .metadata
+                                        .get("artist")
+                                        .map_or_else(String::new, |t| t.first().to_string()),
+                                    duration: selected_song.duration.unwrap_or_default(),
+                                    thumbnail: String::new(),
+                                };
                                 // It's a YouTube video, dispatch a work request to refresh URL and play
                                 let context = Some(crate::shared::events::RefreshContext {
                                     old_song_id: selected_song.id,

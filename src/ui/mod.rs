@@ -638,6 +638,7 @@ impl<'ui> Ui<'ui> {
                     client.add_tag_id(song_id, Tag::Title, &video.title)?;
                     client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                     client.add_tag_id(song_id, Tag::Album, "YouTube")?;
+                    client.add_sticker_id(song_id, "rmpc_yt_id", &video.id)?;
 
                     if context.play_after_refresh {
                         client.play_id(song_id)?;
@@ -656,6 +657,7 @@ impl<'ui> Ui<'ui> {
                 client.add_tag_id(song_id, Tag::Title, &video.title)?;
                 client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                 client.add_tag_id(song_id, Tag::Album, "YouTube")?;
+                client.add_sticker_id(song_id, "rmpc_yt_id", &video.id)?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
             status_info!("Added '{}' to queue", title);
@@ -758,9 +760,10 @@ impl<'ui> Ui<'ui> {
             } else {
                 match &item {
                     PlaylistItem::Local { path } => ctx.queue.iter().any(|s| s.file == *path),
-                    PlaylistItem::Youtube { id } => {
-                        ctx.youtube_song_map.values().any(|v| v.id == *id)
-                    }
+                    PlaylistItem::Youtube { id } => ctx
+                        .queue
+                        .iter()
+                        .any(|s| s.stickers.get("rmpc_yt_id").is_some_and(|v_id| v_id == id)),
                 }
             };
 
@@ -936,8 +939,8 @@ impl<'ui> Ui<'ui> {
             .queue
             .iter()
             .map(|song| {
-                if let Some(video) = ctx.youtube_song_map.get(&song.id) {
-                    crate::youtube::storage::PlaylistItem::Youtube { id: video.id.clone() }
+                if let Some(video_id) = song.stickers.get("rmpc_yt_id") {
+                    crate::youtube::storage::PlaylistItem::Youtube { id: video_id.clone() }
                 } else {
                     crate::youtube::storage::PlaylistItem::Local { path: song.file.clone() }
                 }
@@ -1129,10 +1132,6 @@ impl<'ui> Ui<'ui> {
     pub fn on_event(&mut self, mut event: UiEvent, ctx: &mut Ctx) -> Result<()> {
         match event {
             UiEvent::Exit => {
-                if let Err(e) = crate::youtube::storage::save_youtube_song_map(&ctx.youtube_song_map)
-                {
-                    log::error!(error:? = e; "Failed to save YouTube song map");
-                }
                 if let Ok(Panes::YouTube(p)) = self.panes.get_mut(&PaneType::YouTube, ctx) {
                     if let Err(e) = crate::youtube::storage::save_library(&p.videos_by_channel) {
                         log::error!(error:? = e; "Failed to save YouTube library");
@@ -1274,9 +1273,8 @@ impl<'ui> Ui<'ui> {
                 }
                 (
                     "add_youtube_song" | "refresh_youtube_song",
-                    MpdQueryResult::YouTubeSongAdded { song_id, video },
+                    MpdQueryResult::YouTubeSongAdded { song_id: _, video },
                 ) => {
-                    ctx.youtube_song_map.insert(song_id, video.clone());
                     if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
                         p.add_video(video.clone());
                     }
