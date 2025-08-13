@@ -78,36 +78,6 @@ fn get_playlists_dir() -> Result<PathBuf> {
     Ok(rmpc_dir.join("yt-playlists"))
 }
 
-fn get_youtube_song_map_path() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir().context("Could not find config directory")?;
-    let rmpc_dir = config_dir.join("rmpc");
-    Ok(rmpc_dir.join("youtube_queue_map.json"))
-}
-
-pub fn save_youtube_song_map(map: &HashMap<u32, YouTubeVideo>) -> Result<()> {
-    let path = get_youtube_song_map_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let json_string = serde_json::to_string_pretty(map)?;
-    fs::write(path, json_string)?;
-    Ok(())
-}
-
-pub fn load_youtube_song_map() -> Result<HashMap<u32, YouTubeVideo>> {
-    let path = get_youtube_song_map_path()?;
-    match fs::read_to_string(path) {
-        Ok(json_string) => {
-            let map = serde_json::from_str(&json_string)?;
-            Ok(map)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(HashMap::new()) // File doesn't exist, return empty map
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
 pub fn save_playlist(name: &str, items: &[PlaylistItem]) -> Result<()> {
     let dir = get_playlists_dir()?;
     fs::create_dir_all(&dir)?;
