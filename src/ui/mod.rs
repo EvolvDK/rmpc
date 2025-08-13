@@ -638,7 +638,7 @@ impl<'ui> Ui<'ui> {
                     client.add_tag_id(song_id, Tag::Title, &video.title)?;
                     client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                     client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                    client.sticker_set(&url, "rmpc_yt_id", &video.id)?;
+                    client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
 
                     if context.play_after_refresh {
                         client.play_id(song_id)?;
@@ -657,7 +657,7 @@ impl<'ui> Ui<'ui> {
                 client.add_tag_id(song_id, Tag::Title, &video.title)?;
                 client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                 client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                client.sticker_set(&url, "rmpc_yt_id", &video.id)?;
+                client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
             status_info!("Added '{}' to queue", title);
