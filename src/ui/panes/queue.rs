@@ -213,11 +213,9 @@ impl QueuePane {
                         .queue
                         .iter()
                         .map(|song| {
-                            if let Some(video_id) =
-                                song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id"))
-                            {
+                            if let Some(tag_value) = song.metadata.get("rmpc_yt_id") {
                                 crate::youtube::storage::PlaylistItem::Youtube {
-                                    id: video_id.clone(),
+                                    id: tag_value.first().to_string(),
                                 }
                             } else {
                                 crate::youtube::storage::PlaylistItem::Local {
@@ -266,11 +264,9 @@ impl QueuePane {
                                     .queue
                                     .iter()
                                     .map(|song| {
-                                        if let Some(video_id) =
-                                            song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id"))
-                                        {
+                                        if let Some(tag_value) = song.metadata.get("rmpc_yt_id") {
                                             crate::youtube::storage::PlaylistItem::Youtube {
-                                                id: video_id.clone(),
+                                                id: tag_value.first().to_string(),
                                             }
                                         } else {
                                             crate::youtube::storage::PlaylistItem::Local {
@@ -853,11 +849,10 @@ impl Pane for QueuePane {
                 QueueActions::Play => {
                     if let Some(idx) = self.scrolling_state.get_selected() {
                         if let Some(selected_song) = ctx.queue.get(idx).cloned() {
-                            if let Some(video_id) =
-                                selected_song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id"))
-                            {
+                            if let Some(tag_value) = selected_song.metadata.get("rmpc_yt_id") {
+                                let video_id = tag_value.first();
                                 let video = crate::youtube::YouTubeVideo {
-                                    id: video_id.clone(),
+                                    id: video_id.to_string(),
                                     title: selected_song
                                         .metadata
                                         .get("title")

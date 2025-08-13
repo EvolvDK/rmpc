@@ -638,7 +638,7 @@ impl<'ui> Ui<'ui> {
                     client.add_tag_id(song_id, Tag::Title, &video.title)?;
                     client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                     client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                    client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
+                    client.add_tag_id(song_id, Tag::Custom("rmpc_yt_id".into()), &video.id)?;
 
                     if context.play_after_refresh {
                         client.play_id(song_id)?;
@@ -657,7 +657,7 @@ impl<'ui> Ui<'ui> {
                 client.add_tag_id(song_id, Tag::Title, &video.title)?;
                 client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
                 client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
+                client.add_tag_id(song_id, Tag::Custom("rmpc_yt_id".into()), &video.id)?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
             status_info!("Added '{}' to queue", title);
@@ -758,12 +758,10 @@ impl<'ui> Ui<'ui> {
             } else {
                 match &item {
                     PlaylistItem::Local { path } => ctx.queue.iter().any(|s| s.file == *path),
-                    PlaylistItem::Youtube { id } => ctx.queue.iter().any(|s| {
-                        s.stickers
-                            .as_ref()
-                            .and_then(|s| s.get("rmpc_yt_id"))
-                            .is_some_and(|v_id| v_id == id)
-                    }),
+                    PlaylistItem::Youtube { id } => ctx
+                        .queue
+                        .iter()
+                        .any(|s| s.metadata.get("rmpc_yt_id").is_some_and(|v| v.first() == id)),
                 }
             };
 
@@ -939,10 +937,10 @@ impl<'ui> Ui<'ui> {
             .queue
             .iter()
             .map(|song| {
-                if let Some(video_id) =
-                    song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id"))
-                {
-                    crate::youtube::storage::PlaylistItem::Youtube { id: video_id.clone() }
+                if let Some(tag_value) = song.metadata.get("rmpc_yt_id") {
+                    crate::youtube::storage::PlaylistItem::Youtube {
+                        id: tag_value.first().to_string(),
+                    }
                 } else {
                     crate::youtube::storage::PlaylistItem::Local { path: song.file.clone() }
                 }
