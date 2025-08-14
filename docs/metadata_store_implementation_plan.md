@@ -100,3 +100,27 @@ C'est l'étape la plus critique pour garantir la cohérence des données.
         3.  Calculer la différence : les `song_id` qui sont dans la base de données mais plus dans la file d'attente doivent être supprimés.
         4.  Appeler `metadata_store.remove_songs(...)` avec les IDs à supprimer.
     -   Une optimisation sera de gérer les événements de suppression de manière plus ciblée si le protocole le permet facilement.
+
+### Étape 5 : Implémentation de la logique anti-doublons
+
+L'objectif est d'empêcher l'ajout de morceaux déjà présents dans la file d'attente, que ce soit des pistes locales ou YouTube.
+
+1.  **Mise à jour du `MetadataStore`** :
+    -   Ajouter une nouvelle méthode pour récupérer tous les IDs YouTube actuellement dans la base de données :
+      ```rust
+      // Récupère l'ensemble de tous les IDs YouTube stockés
+      pub fn get_all_youtube_ids(&self) -> Result<HashSet<String>>;
+      ```
+
+2.  **Logique pour les pistes YouTube** :
+    -   La logique d'ajout de vidéos YouTube (par exemple, dans `src/ui/panes/youtube.rs` avant d'envoyer la `WorkRequest`) devra être modifiée :
+        -   Appeler `ctx.metadata_store.get_all_youtube_ids()` pour obtenir les IDs existants.
+        -   Vérifier si l'ID de la vidéo à ajouter est déjà dans cet ensemble.
+        -   Si c'est le cas, afficher une notification à l'utilisateur (par exemple via `status_warn!`) et annuler l'ajout.
+
+3.  **Logique pour les pistes locales** :
+    -   La logique d'ajout de fichiers locaux (probablement dans les panneaux `Browser` ou `Playlists`) doit être modifiée.
+    -   Avant d'envoyer la commande `add` à MPD, il faudra :
+        -   Utiliser la file d'attente mise en cache (`ctx.queue`).
+        -   Itérer sur les chansons de la file d'attente et vérifier si le chemin du fichier (`song.file`) du morceau à ajouter est déjà présent.
+        -   Si c'est le cas, afficher une notification et annuler l'ajout.
