@@ -624,6 +624,7 @@ impl<'ui> Ui<'ui> {
         context: Option<crate::shared::events::RefreshContext>,
         ctx: &mut Ctx,
     ) -> Result<()> {
+        log::info!("Adding YouTube video to queue, ID: {}", video.id);
         let title = video.title.clone();
         if let Some(context) = context {
             // This is a refresh for an existing song

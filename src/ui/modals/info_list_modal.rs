@@ -281,6 +281,12 @@ impl From<&Song> for KeyValues {
             result.push(KeyValue { key: "Filename".to_owned(), value: file_name.into_owned() });
         }
 
+        if let Some(yt_id) =
+            song.metadata.get("Comment").and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
+        {
+            result.push(KeyValue { key: "YouTube ID".to_owned(), value: yt_id.to_string() });
+        }
+
         if let Some(title) = song.metadata.get("title") {
             result.extend(
                 title

@@ -354,6 +354,16 @@ impl ToPreview for YouTubeVideo {
         info_group.push(
             Line::from(vec![
                 start_of_line_spacer.clone(),
+                Span::styled("ID", key_style),
+                separator.clone(),
+                Span::from(self.id.clone()),
+            ])
+            .into(),
+        );
+
+        info_group.push(
+            Line::from(vec![
+                start_of_line_spacer.clone(),
                 Span::styled("Channel", key_style),
                 separator.clone(),
                 Span::from(self.channel.clone()),
