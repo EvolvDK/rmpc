@@ -287,7 +287,7 @@ impl From<&Song> for KeyValues {
             result.push(KeyValue { key: "YouTube ID".to_owned(), value: yt_id.to_string() });
         }
 
-        if let Some(title) = song.metadata.get("title") {
+        if let Some(title) = song.metadata.get("Title") {
             result.extend(
                 title
                     .iter()
@@ -295,7 +295,7 @@ impl From<&Song> for KeyValues {
             );
         }
 
-        if let Some(artist) = song.metadata.get("artist") {
+        if let Some(artist) = song.metadata.get("Artist") {
             result.extend(
                 artist
                     .iter()
@@ -303,7 +303,7 @@ impl From<&Song> for KeyValues {
             );
         }
 
-        if let Some(album) = song.metadata.get("album") {
+        if let Some(album) = song.metadata.get("Album") {
             result.extend(
                 album
                     .iter()
@@ -320,7 +320,7 @@ impl From<&Song> for KeyValues {
             song.metadata
                 .iter()
                 .filter(|(key, _)| {
-                    !["title", "album", "artist", "duration"].contains(&(*key).as_str())
+                    !["Title", "Album", "Artist", "Comment", "Duration"].contains(&key.as_str())
                 })
                 .flat_map(|(k, v)| {
                     v.iter().map(|item| KeyValue { key: k.to_owned(), value: item.to_owned() })
