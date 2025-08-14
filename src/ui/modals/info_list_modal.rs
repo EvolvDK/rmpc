@@ -281,10 +281,8 @@ impl From<&Song> for KeyValues {
             result.push(KeyValue { key: "Filename".to_owned(), value: file_name.into_owned() });
         }
 
-        if let Some(yt_id) =
-            song.metadata.get("Comment").and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
-        {
-            result.push(KeyValue { key: "YouTube ID".to_owned(), value: yt_id.to_string() });
+        if let Some(yt_id) = song.stickers.as_ref().and_then(|s| s.get("rmpc_yt_id")) {
+            result.push(KeyValue { key: "YouTube ID".to_owned(), value: yt_id.clone() });
         }
 
         if let Some(title) = song.metadata.get("Title") {
@@ -320,7 +318,7 @@ impl From<&Song> for KeyValues {
             song.metadata
                 .iter()
                 .filter(|(key, _)| {
-                    !["Title", "Album", "Artist", "Comment", "Duration"].contains(&key.as_str())
+                    !["Title", "Album", "Artist", "Duration"].contains(&key.as_str())
                 })
                 .flat_map(|(k, v)| {
                     v.iter().map(|item| KeyValue { key: k.to_owned(), value: item.to_owned() })

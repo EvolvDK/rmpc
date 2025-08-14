@@ -503,7 +503,16 @@ impl MpdClient for Client<'_> {
     }
 
     fn playlist_id(&mut self, song_id: u32) -> MpdResult<Option<Song>> {
-        self.send_playlist_id(song_id).and_then(|()| self.read_opt_response())
+        let mut song: Option<Song> =
+            self.send_playlist_id(song_id).and_then(|()| self.read_opt_response())?;
+
+        if let Some(song) = song.as_mut() {
+            if let Ok(stickers) = self.list_stickers(&song.file) {
+                song.stickers = Some(stickers.0);
+            }
+        }
+
+        Ok(song)
     }
 
     fn playlist_info(&mut self, fetch_stickers: bool) -> MpdResult<Option<Vec<Song>>> {

@@ -636,14 +636,7 @@ impl<'ui> Ui<'ui> {
                         .add_id(&url, Some(QueuePosition::Absolute(context.position)))?
                         .id
                         .context("MPD did not return an ID for the refreshed song")?;
-                    client.add_tag_id(song_id, Tag::Title, &video.title)?;
-                    client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
-                    client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                    client.add_tag_id(
-                        song_id,
-                        Tag::Comment,
-                        &format!("rmpc_yt_id={}", video.id),
-                    )?;
+                    client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
 
                     if context.play_after_refresh {
                         client.play_id(song_id)?;
@@ -671,14 +664,7 @@ impl<'ui> Ui<'ui> {
                     .add_id(&url, None)?
                     .id
                     .context("MPD did not return an ID for the added song")?;
-                client.add_tag_id(song_id, Tag::Title, &video.title)?;
-                client.add_tag_id(song_id, Tag::Artist, &video.channel)?;
-                client.add_tag_id(song_id, Tag::Album, "YouTube")?;
-                client.add_tag_id(
-                    song_id,
-                    Tag::Comment,
-                    &format!("rmpc_yt_id={}", video.id),
-                )?;
+                client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
             status_info!("Added '{}' to queue", title);
