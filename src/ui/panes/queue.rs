@@ -81,6 +81,7 @@ enum Areas {
 
 const ADD_TO_PLAYLIST: &str = "add_to_playlist";
 const ADD_TO_PLAYLIST_MULTIPLE: &str = "add_to_playlist_multiple";
+const GET_SONG_INFO: &str = "get_song_info";
 
 impl QueuePane {
     pub fn new(ctx: &Ctx) -> Self {
@@ -182,14 +183,14 @@ impl QueuePane {
                 });
                 section.add_item("Show info", move |ctx| {
                     if let Some(song) = selected_song {
-                        modal!(
-                            ctx,
-                            InfoListModal::builder()
-                                .items(&song)
-                                .title("Song info")
-                                .column_widths(&[30, 70])
-                                .build()
-                        );
+                        let song_id = song.id;
+                        ctx.query()
+                            .id(GET_SONG_INFO)
+                            .target(PaneType::Queue)
+                            .query(move |client| {
+                                let song = client.playlist_id(song_id)?;
+                                Ok(MpdQueryResult::SongInfo(song))
+                            });
                     }
                     Ok(())
                 });
@@ -708,6 +709,21 @@ impl Pane for QueuePane {
         ctx: &Ctx,
     ) -> Result<()> {
         match (id, data) {
+            (GET_SONG_INFO, MpdQueryResult::SongInfo(Some(song))) => {
+                modal!(
+                    ctx,
+                    InfoListModal::builder()
+                        .items(&song)
+                        .title("Song info")
+                        .column_widths(&[30, 70])
+                        .build()
+                );
+            }
+            (GET_SONG_INFO, MpdQueryResult::SongInfo(None)) => {
+                status_warn!(
+                    "Could not find song info. It may have been removed from the queue."
+                );
+            }
             (ADD_TO_PLAYLIST, MpdQueryResult::AddToPlaylist { playlists, song_file }) => {
                 modal!(
                     ctx,
@@ -1256,14 +1272,14 @@ impl Pane for QueuePane {
                     if let Some(selected_song) =
                         self.scrolling_state.get_selected().and_then(|idx| ctx.queue.get(idx))
                     {
-                        modal!(
-                            ctx,
-                            InfoListModal::builder()
-                                .items(selected_song)
-                                .title("Song info")
-                                .column_widths(&[30, 70])
-                                .build()
-                        );
+                        let song_id = selected_song.id;
+                        ctx.query()
+                            .id(GET_SONG_INFO)
+                            .target(PaneType::Queue)
+                            .query(move |client| {
+                                let song = client.playlist_id(song_id)?;
+                                Ok(MpdQueryResult::SongInfo(song))
+                            });
                     } else {
                         status_error!("No song selected");
                     }

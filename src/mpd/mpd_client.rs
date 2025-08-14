@@ -125,6 +125,7 @@ pub trait MpdCommand {
     fn send_clear(&mut self) -> MpdResult<()>;
     fn send_delete_id(&mut self, id: u32) -> MpdResult<()>;
     fn send_delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()>;
+    fn send_playlist_id(&mut self, song_id: u32) -> MpdResult<()>;
     fn send_playlist_info(&mut self) -> MpdResult<()>;
     fn send_find(&mut self, filter: &[Filter<'_>]) -> MpdResult<()>;
     fn send_search(&mut self, filter: &[Filter<'_>]) -> MpdResult<()>;
@@ -240,6 +241,7 @@ pub trait MpdClient: Sized {
     fn clear(&mut self) -> MpdResult<()>;
     fn delete_id(&mut self, id: u32) -> MpdResult<()>;
     fn delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()>;
+    fn playlist_id(&mut self, song_id: u32) -> MpdResult<Option<Song>>;
     fn playlist_info(&mut self, fetch_stickers: bool) -> MpdResult<Option<Vec<Song>>>;
     fn find(&mut self, filter: &[Filter<'_>]) -> MpdResult<Vec<Song>>;
     fn search(&mut self, filter: &[Filter<'_>]) -> MpdResult<Vec<Song>>;
@@ -498,6 +500,10 @@ impl MpdClient for Client<'_> {
 
     fn delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()> {
         self.send_delete_from_queue(songs).and_then(|()| self.read_ok())
+    }
+
+    fn playlist_id(&mut self, song_id: u32) -> MpdResult<Option<Song>> {
+        self.send_playlist_id(song_id).and_then(|()| self.read_opt_response())
     }
 
     fn playlist_info(&mut self, fetch_stickers: bool) -> MpdResult<Option<Vec<Song>>> {
@@ -1050,6 +1056,10 @@ impl<T: SocketClient> MpdCommand for T {
 
     fn send_delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()> {
         self.execute(&format!("delete {}", songs.as_mpd_range()))
+    }
+
+    fn send_playlist_id(&mut self, song_id: u32) -> MpdResult<()> {
+        self.execute(&format!("playlistid {song_id}"))
     }
 
     fn send_playlist_info(&mut self) -> MpdResult<()> {

@@ -97,6 +97,7 @@ pub(crate) enum MpdQueryResult {
     AlbumArt(Option<Vec<u8>>),
     Status { data: Status, source_event: Option<IdleEvent> },
     Queue(Option<Vec<Song>>),
+    SongInfo(Option<Song>),
     Volume(Volume),
     Outputs(Vec<PartitionedOutput>),
     Decoders(Vec<Decoder>),
