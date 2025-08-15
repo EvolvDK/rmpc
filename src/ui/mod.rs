@@ -28,6 +28,8 @@ use self::{
 };
 use crate::{
     core::data_store::models::{PlaylistItem, YouTubeVideo},
+    shared::mpd_query::{ListItem, PreviewGroup},
+    ui::panes::ToPreview,
     MpdQueryResult,
     shared::events::AppEvent,
     youtube,
@@ -102,15 +104,12 @@ macro_rules! active_tab_call {
 
 impl<'ui> Ui<'ui> {
     fn get_youtube_master_library(&mut self, ctx: &mut Ctx) -> Result<HashMap<String, YouTubeVideo>> {
-        if let Ok(Panes::YouTube(p)) = self.panes.get_mut(&PaneType::YouTube, ctx) {
-            Ok(p.videos_by_channel
-                .values()
-                .flatten()
-                .map(|v| (v.youtube_id.clone(), v.clone()))
-                .collect())
-        } else {
-            Ok(HashMap::new())
-        }
+        Ok(ctx
+            .data_store
+            .get_all_library_videos()?
+            .into_iter()
+            .map(|v| (v.youtube_id.clone(), v))
+            .collect())
     }
 
     fn sync_videos_to_playlists_pane(
@@ -779,13 +778,27 @@ impl<'ui> Ui<'ui> {
         items_to_add: Vec<PlaylistItem>,
         ctx: &mut Ctx,
     ) -> Result<()> {
-        self.resolve_and_sync_youtube_videos(&items_to_add, ctx)?;
+        let playlist_id =
+            ctx.data_store.get_all_playlists()?.into_iter().find(|p| p.name == name).map(|p| p.id);
 
-        let mut existing_items = crate::youtube::storage::load_playlist(name)?;
-        existing_items.extend(items_to_add);
-        crate::youtube::storage::save_playlist(name, &existing_items)?;
+        if let Some(playlist_id) = playlist_id {
+            for item in items_to_add {
+                match item {
+                    PlaylistItem::Local(path) => {
+                        ctx.data_store.add_local_file_to_playlist(playlist_id, &path)?;
+                    }
+                    PlaylistItem::YouTube(video) => {
+                        ctx.data_store.add_video_to_library(&video)?;
+                        ctx.data_store
+                            .add_youtube_video_to_playlist(playlist_id, &video.youtube_id)?;
+                    }
+                }
+            }
+        } else {
+            return Err(anyhow!("Playlist '{}' not found", name));
+        }
 
-        status_info!("Playlist '{}' mise à jour.", name);
+        status_info!("Playlist '{}' updated.", name);
         ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
         Ok(())
     }
@@ -796,10 +809,21 @@ impl<'ui> Ui<'ui> {
         items: Vec<PlaylistItem>,
         ctx: &mut Ctx,
     ) -> Result<()> {
-        crate::youtube::storage::save_playlist(name, &items)?;
-        self.resolve_and_sync_youtube_videos(&items, ctx)?;
+        let playlist_id = ctx.data_store.create_playlist(name)?;
+        for item in items.iter() {
+            match item {
+                PlaylistItem::Local(path) => {
+                    ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
+                }
+                PlaylistItem::YouTube(video) => {
+                    ctx.data_store.add_video_to_library(video)?;
+                    ctx.data_store
+                        .add_youtube_video_to_playlist(playlist_id, &video.youtube_id)?;
+                }
+            }
+        }
 
-        status_info!("Créé la playlist '{}' avec {} morceaux", name, items.len());
+        status_info!("Created playlist '{}' with {} items", name, items.len());
         ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
         Ok(())
     }
@@ -813,12 +837,9 @@ impl<'ui> Ui<'ui> {
             video_id: String,
         }
 
-        let library = youtube::storage::load_library()?;
-        let all_video_ids: std::collections::HashSet<String> = library
-            .values()
-            .flatten()
-            .map(|v| v.youtube_id.clone())
-            .collect();
+        let library = ctx.data_store.get_all_library_videos()?;
+        let all_video_ids: std::collections::HashSet<String> =
+            library.into_iter().map(|v| v.youtube_id).collect();
 
         let mut reader = csv::Reader::from_path(path)?;
         let mut count = 0;
@@ -849,12 +870,9 @@ impl<'ui> Ui<'ui> {
             video_id: String,
         }
 
-        let library = youtube::storage::load_library()?;
-        let all_video_ids: std::collections::HashSet<String> = library
-            .values()
-            .flatten()
-            .map(|v| v.youtube_id.clone())
-            .collect();
+        let library = ctx.data_store.get_all_library_videos()?;
+        let all_video_ids: std::collections::HashSet<String> =
+            library.into_iter().map(|v| v.youtube_id).collect();
         let mut new_videos_count = 0;
 
         for entry in std::fs::read_dir(path)? {
@@ -862,20 +880,26 @@ impl<'ui> Ui<'ui> {
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "csv") {
                 if let Some(playlist_name) = path.file_stem().and_then(|s| s.to_str()) {
+                    let playlist_id = match ctx.data_store.create_playlist(playlist_name) {
+                        Ok(id) => id,
+                        Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
+                            status_warn!("Playlist '{}' already exists, skipping.", playlist_name);
+                            continue;
+                        }
+                        Err(e) => return Err(e.into()),
+                    };
                     let mut reader = csv::Reader::from_path(&path)?;
-                    let mut items = Vec::new();
                     for result in reader.deserialize() {
                         let record: TakeoutSong = result?;
-                        if !all_video_ids.contains(&record.video_id)
-                            && self.pending_youtube_imports == 0
-                        {
-                            ctx.work_sender
-                                .send(WorkRequest::YouTubeGetVideoInfo { id: record.video_id.clone() })?;
+                        if !all_video_ids.contains(&record.video_id) {
+                            ctx.work_sender.send(WorkRequest::YouTubeGetVideoInfo {
+                                id: record.video_id.clone(),
+                            })?;
                             new_videos_count += 1;
                         }
-                        items.push(PlaylistItem::Youtube { id: record.video_id });
+                        ctx.data_store
+                            .add_youtube_video_to_playlist(playlist_id, &record.video_id)?;
                     }
-                    youtube::storage::save_playlist(playlist_name, &items)?;
                     status_info!("Imported playlist '{}'.", playlist_name);
                 }
             }
@@ -904,16 +928,33 @@ impl<'ui> Ui<'ui> {
 
         if items.is_empty() {
             status_info!("Queue is empty, nothing to save.");
-        } else {
-            match crate::youtube::storage::save_playlist(name, &items) {
-                Ok(()) => {
-                    status_info!("Saved {} items to playlist '{}'", items.len(), name);
-                    ctx.app_event_sender
-                        .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
-                }
-                Err(e) => status_error!("Failed to save playlist '{}': {}", name, e),
+            return Ok(());
+        }
+
+        let playlist_id = match ctx.data_store.create_playlist(name) {
+            Ok(id) => id,
+            Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
+                let existing = ctx
+                    .data_store
+                    .get_all_playlists()?
+                    .into_iter()
+                    .find(|p| p.name == name)
+                    .context("Failed to find playlist that should exist")?;
+                ctx.data_store.delete_playlist(existing.id)?;
+                ctx.data_store.create_playlist(name)?
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        for item in items.iter() {
+            if let PlaylistItem::Local(path) = item {
+                ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
             }
         }
+
+        status_info!("Saved {} items to playlist '{}'", items.len(), name);
+        ctx.app_event_sender
+            .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
         Ok(())
     }
 

@@ -11,7 +11,7 @@ use ratatui::{
 
 use crate::{
     config::{keys::CommonAction, tabs::PaneType},
-    core::data_store::models::{PlaylistItem, YouTubeVideo},
+    core::data_store::models::{PlaylistItem, Playlist, YouTubeVideo},
     ctx::Ctx,
     mpd::mpd_client::{Filter, MpdClient, Tag},
     shared::{
@@ -299,7 +299,7 @@ impl Pane for RmpcPlaylistsPane {
                             "Could not find video info in library.".to_string()
                         }
                     }
-                    PlaylistItem::Local { .. } => "Loading preview...".to_string(),
+                    PlaylistItem::Local(_) => "Loading preview...".to_string(),
                 }
             } else {
                 "No item selected".to_string()
@@ -423,33 +423,43 @@ impl Pane for RmpcPlaylistsPane {
                         self.prepare_preview(ctx)?;
                     }
 
-                    if let Some(name) = self.get_selected_playlist_name().map(|s| s.to_owned()) {
-                        let name_for_delete = name.clone();
-                        let name_for_rename = name.clone();
-                        let other_playlists: Vec<_> = self.playlists.iter().filter(|p| **p != name).cloned().collect();
+                    if let Some(playlist) = self.get_selected_playlist().cloned() {
+                        let other_playlists: Vec<Playlist> = self
+                            .playlists
+                            .iter()
+                            .filter(|p| p.id != playlist.id)
+                            .cloned()
+                            .collect();
 
                         let mut modal = menu::modal::MenuModal::new(ctx)
-                            .list_section(ctx, menu::playlist_queue_actions(name.clone()))
-                            .list_section(ctx, menu::playlist_cloning_actions(name.clone()));
+                            .list_section(ctx, menu::playlist_queue_actions(playlist.name.clone()))
+                            .list_section(ctx, menu::playlist_cloning_actions(playlist.name.clone()));
 
                         if !other_playlists.is_empty() {
+                            let other_playlist_names =
+                                other_playlists.into_iter().map(|p| p.name).collect();
                             modal = modal.list_section(
                                 ctx,
-                                menu::add_playlist_to_playlist_actions(name.clone(), other_playlists),
+                                menu::add_playlist_to_playlist_actions(
+                                    playlist.name.clone(),
+                                    other_playlist_names,
+                                ),
                             );
                         }
 
                         let final_modal = modal
-                            .list_section(ctx, |section| {
+                            .list_section(ctx, move |section| {
+                                let p = playlist.clone();
                                 Some(
                                     section
                                         .item("Rename playlist", move |ctx| {
+                                            let p_clone = p.clone();
                                             let modal = InputModal::new(ctx)
                                                 .title("Rename playlist")
-                                                .initial_value(name_for_rename.clone())
+                                                .initial_value(p_clone.name.clone())
                                                 .on_confirm(move |ctx, new_name| {
-                                                    if !new_name.is_empty() && new_name != &name_for_rename {
-                                                        if let Err(e) = storage::rename_playlist(&name_for_rename, new_name) {
+                                                    if !new_name.is_empty() && new_name != &p_clone.name {
+                                                        if let Err(e) = ctx.data_store.rename_playlist(p_clone.id, new_name) {
                                                             status_error!("Failed to rename playlist: {}", e);
                                                         } else {
                                                             ctx.app_event_sender
@@ -462,12 +472,13 @@ impl Pane for RmpcPlaylistsPane {
                                             Ok(())
                                         })
                                         .item("Delete playlist", move |ctx| {
+                                            let p_clone = p.clone();
                                             let modal = menu::modal::MenuModal::new(ctx)
                                                 .list_section(ctx, |section| {
                                                     Some(
                                                         section
-                                                            .item(format!("Yes, delete '{}'", name_for_delete), move |ctx| {
-                                                                if let Err(e) = storage::delete_playlist(&name_for_delete) {
+                                                            .item(format!("Yes, delete '{}'", p_clone.name), move |ctx| {
+                                                                if let Err(e) = ctx.data_store.delete_playlist(p_clone.id) {
                                                                     status_error!("Failed to delete playlist: {}", e);
                                                                 } else {
                                                                     ctx.app_event_sender
@@ -501,14 +512,29 @@ impl Pane for RmpcPlaylistsPane {
 
                     let items = self.get_selected_content_items();
                     if !items.is_empty() {
-                        if let Some(playlist_name) = self.get_selected_playlist_name().map(|s| s.to_owned()) {
-                            let other_playlists: Vec<_> = self.playlists.iter().filter(|p| **p != playlist_name).cloned().collect();
+                        if let Some(playlist) = self.get_selected_playlist() {
+                            let other_playlists: Vec<_> = self
+                                .playlists
+                                .iter()
+                                .filter(|p| p.id != playlist.id)
+                                .map(|p| p.name.clone())
+                                .collect();
                             let modal = menu::modal::MenuModal::new(ctx)
                                 .list_section(ctx, menu::queue_actions(items.clone()))
-                                .list_section(ctx, menu::playlist_management_actions(items.clone(), playlist_name))
-                                .list_section(ctx, menu::add_to_playlist_actions(items, other_playlists))
+                                .list_section(
+                                    ctx,
+                                    menu::playlist_management_actions(
+                                        items.clone(),
+                                        playlist.name.clone(),
+                                    ),
+                                )
+                                .list_section(
+                                    ctx,
+                                    menu::add_to_playlist_actions(items, other_playlists),
+                                )
                                 .build();
-                            ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;
+                            ctx.app_event_sender
+                                .send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;
                         }
                     }
                 }
