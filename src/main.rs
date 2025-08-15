@@ -22,6 +22,7 @@ use crate::{
         ConfigFile,
         cli::{Args, Command},
     },
+    core::data_store::DataStore,
     mpd::client::Client,
     ui::UiAppEvent,
     shared::{
@@ -277,9 +278,11 @@ fn main() -> Result<()> {
 
             let tx_clone = event_tx.clone();
 
+            let data_store = DataStore::new().context("Failed to initialize data store")?;
             let ctx = Ctx::try_new(
                 &mut client,
                 config,
+                data_store,
                 tx_clone,
                 worker_tx.clone(),
                 client_tx.clone(),

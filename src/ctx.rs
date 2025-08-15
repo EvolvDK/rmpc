@@ -10,6 +10,7 @@ use bon::bon;
 use crossbeam::channel::{SendError, Sender, bounded};
 
 use crate::{
+    core::data_store::DataStore,
     AppEvent,
     MpdCommand,
     MpdQuery,
@@ -39,6 +40,7 @@ use crate::{
 #[derive(derive_more::Debug)]
 pub struct Ctx {
     pub(crate) config: std::sync::Arc<Config>,
+    pub(crate) data_store: DataStore,
     pub(crate) status: Status,
     pub(crate) queue: Vec<Song>,
     pub(crate) active_tab: TabName,
@@ -67,6 +69,7 @@ impl Ctx {
     pub(crate) fn try_new(
         client: &mut Client<'_>,
         mut config: Config,
+        data_store: DataStore,
         app_event_sender: Sender<AppEvent>,
         work_sender: Sender<WorkRequest>,
         client_request_sender: Sender<ClientRequest>,
@@ -97,6 +100,7 @@ impl Ctx {
         Ok(Self {
             lrc_index: LrcIndex::default(),
             config: std::sync::Arc::new(config),
+            data_store,
             status,
             queue,
             active_tab,
