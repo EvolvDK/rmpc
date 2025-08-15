@@ -245,7 +245,7 @@ impl Pane for RmpcPlaylistsPane {
                 ctx.config.as_border_style()
             });
 
-        let library_videos: std::collections::HashMap<String, &crate::youtube::YouTubeVideo> =
+        let library_videos: std::collections::HashMap<String, &YouTubeVideo> =
             self.youtube_library.iter().map(|(id, v)| (id.clone(), v)).collect();
 
         let content_items: Vec<ListItem> = self

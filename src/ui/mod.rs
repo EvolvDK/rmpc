@@ -16,7 +16,7 @@ use panes::{PaneContainer, Panes, pane_call};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     symbols::border,
     text::{Line, Span},
     widgets::{Block, Borders, ListItem},

@@ -52,6 +52,7 @@ use crate::{
             SymbolsConfig, TagResolutionStrategy,
         },
     },
+    core::data_store::models::YouTubeVideo,
     ctx::Ctx,
     mpd::{
         commands::{status::OnOffOneshot, Song, State, volume::Bound},
@@ -63,7 +64,6 @@ use crate::{
         mouse_event::MouseEvent,
         mpd_query::PreviewGroup,
     },
-    youtube::YouTubeVideo,
     MpdQueryResult,
 };
 
@@ -331,57 +331,6 @@ pub(crate) trait Pane {
 
     fn resize(&mut self, area: Rect, ctx: &Ctx) -> Result<()> {
         Ok(())
-    }
-}
-
-impl ToPreview for YouTubeVideo {
-    fn to_preview(&self, key_style: Style, group_style: Style) -> Vec<PreviewGroup> {
-        let separator = Span::from(": ");
-        let start_of_line_spacer = Span::from(" ");
-
-        let mut info_group = PreviewGroup::new(Some(" --- [Info]"), Some(group_style));
-
-        info_group.push(
-            Line::from(vec![
-                start_of_line_spacer.clone(),
-                Span::styled("Title", key_style),
-                separator.clone(),
-                Span::from(self.title.clone()),
-            ])
-            .into(),
-        );
-
-        info_group.push(
-            Line::from(vec![
-                start_of_line_spacer.clone(),
-                Span::styled("ID", key_style),
-                separator.clone(),
-                Span::from(self.id.clone()),
-            ])
-            .into(),
-        );
-
-        info_group.push(
-            Line::from(vec![
-                start_of_line_spacer.clone(),
-                Span::styled("Channel", key_style),
-                separator.clone(),
-                Span::from(self.channel.clone()),
-            ])
-            .into(),
-        );
-
-        info_group.push(
-            Line::from(vec![
-                start_of_line_spacer.clone(),
-                Span::styled("Duration", key_style),
-                separator.clone(),
-                Span::from(Duration::from_secs_f64(self.duration).to_string()),
-            ])
-            .into(),
-        );
-
-        vec![info_group]
     }
 }
 

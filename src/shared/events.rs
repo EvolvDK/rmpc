@@ -18,9 +18,9 @@ use crate::{
         tabs::PaneType,
         theme::UiConfig,
     },
+    core::data_store::models::YouTubeVideo,
     mpd::commands::IdleEvent,
     ui::UiAppEvent,
-    youtube::YouTubeVideo,
 };
 
 #[derive(Debug, Clone)]

@@ -8,7 +8,7 @@ use ratatui::{style::Style, widgets::ListItem};
 use super::{events::AppEvent, mpd_client_ext::PartitionedOutput};
 use crate::{
     config::tabs::PaneType,
-    youtube::YouTubeVideo,
+    core::data_store::models::YouTubeVideo,
     mpd::{
         client::Client,
         commands::{Decoder, IdleEvent, Song, Status, Volume},
