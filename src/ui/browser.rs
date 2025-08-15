@@ -527,18 +527,37 @@ where
                 if !current_items.is_empty() {
                     let cloned_items = current_items.clone();
                     section.add_item("Add to queue", move |ctx| {
-                        ctx.command(move |client| {
-                            client.enqueue_multiple(
-                                cloned_items,
-                                Position::EndOfQueue,
-                                Autoplay::None,
-                            )?;
-                            Ok(())
-                        });
+                        let existing_files: std::collections::HashSet<String> =
+                            ctx.queue.iter().map(|s| s.file.clone()).collect();
+                        let original_len = cloned_items.len();
+                        let enqueue: Vec<_> = cloned_items
+                            .into_iter()
+                            .filter(|item| match item {
+                                Enqueue::File(path) => !existing_files.contains(path),
+                                _ => true,
+                            })
+                            .collect();
+
+                        let skipped_count = original_len - enqueue.len();
+                        if skipped_count > 0 {
+                            status_info!("Skipped {} duplicate item(s).", skipped_count);
+                        }
+
+                        if !enqueue.is_empty() {
+                            ctx.command(move |client| {
+                                client.enqueue_multiple(
+                                    enqueue,
+                                    Position::EndOfQueue,
+                                    Autoplay::None,
+                                )?;
+                                Ok(())
+                            });
+                        }
                         Ok(())
                     });
                     let cloned_items = current_items.clone();
                     section.add_item("Replace queue", move |ctx| {
+                        ctx.data_store.clear_queue()?;
                         ctx.command(move |client| {
                             client.enqueue_multiple(
                                 cloned_items,

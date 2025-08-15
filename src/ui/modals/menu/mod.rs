@@ -170,13 +170,31 @@ pub fn create_add_modal<'a>(
             for (label, options, (enqueue, hovered_idx)) in opts {
                 section = section.item(label, move |ctx| {
                     if !enqueue.is_empty() {
-                        ctx.command(move |client| {
-                            let autoplay =
-                                options.autoplay(queue_len, current_song_idx, hovered_idx);
-                            client.enqueue_multiple(enqueue, options.position, autoplay)?;
+                        let existing_files: std::collections::HashSet<String> =
+                            ctx.queue.iter().map(|s| s.file.clone()).collect();
+                        let original_len = enqueue.len();
+                        let enqueue: Vec<_> = enqueue
+                            .into_iter()
+                            .filter(|item| match item {
+                                Enqueue::File(path) => !existing_files.contains(path),
+                                _ => true,
+                            })
+                            .collect();
 
-                            Ok(())
-                        });
+                        let skipped_count = original_len - enqueue.len();
+                        if skipped_count > 0 {
+                            status_info!("Skipped {} duplicate item(s).", skipped_count);
+                        }
+
+                        if !enqueue.is_empty() {
+                            ctx.command(move |client| {
+                                let autoplay =
+                                    options.autoplay(queue_len, current_song_idx, hovered_idx);
+                                client.enqueue_multiple(enqueue, options.position, autoplay)?;
+
+                                Ok(())
+                            });
+                        }
                     }
                     Ok(())
                 });
