@@ -86,35 +86,40 @@ Cette étape consiste à construire le cœur du nouveau système.
       );
       ```
 
-4.  **Implémenter l'API du `DataStore`** :
+4.  **Implémenter un mécanisme de migration de schéma** :
+    -   Au démarrage, le `DataStore` vérifiera la `PRAGMA user_version` de la base de données.
+    -   Si la version est obsolète, des scripts SQL de migration seront appliqués séquentiellement pour mettre à jour le schéma à la dernière version. Cela garantit que les futures modifications de la structure de la base de données ne corrompront pas les données des utilisateurs.
+
+5.  **Implémenter l'API du `DataStore`** :
     -   Créer une `struct DataStore` qui contiendra la connexion à la base de données.
-    -   Implémenter une API complète pour gérer à la fois la file d'attente et la bibliothèque/playlists.
+    -   Définir un type d'erreur personnalisé (`enum DataStoreError`) pour fournir un retour d'information plus précis que les erreurs `rusqlite` génériques (par ex. `PlaylistNotFound`, `DatabaseError`). Toutes les méthodes de l'API retourneront `Result<..., DataStoreError>`.
+    -   Implémenter une API complète pour gérer à la fois la file d'attente et la bibliothèque/playlists. L'API privilégiera l'utilisation d'IDs uniques (clés primaires) plutôt que de noms pour une plus grande robustesse.
       ```rust
       // --- Méthodes générales ---
-      pub fn new() -> Result<Self>; // Ouvre ou crée la base de données
+      pub fn new() -> Result<Self, DataStoreError>; // Ouvre/crée la DB et applique les migrations
 
       // --- Métadonnées de la file d'attente ---
-      pub fn add_youtube_song_to_queue(&self, song_id: u32, youtube_id: &str) -> Result<()>;
-      pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>>;
-      pub fn remove_songs_from_queue(&self, song_ids: &[u32]) -> Result<()>;
-      pub fn clear_queue(&self) -> Result<()>;
+      pub fn add_youtube_song_to_queue(&self, song_id: u32, youtube_id: &str) -> Result<(), DataStoreError>;
+      pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>, DataStoreError>;
+      pub fn remove_songs_from_queue(&self, song_ids: &[u32]) -> Result<(), DataStoreError>;
+      pub fn clear_queue(&self) -> Result<(), DataStoreError>;
 
       // --- Gestion de la bibliothèque (Vidéos) ---
-      pub fn add_video_to_library(&self, video: &YouTubeVideo) -> Result<()>;
-      pub fn remove_video_from_library(&self, youtube_id: &str) -> Result<()>;
-      pub fn get_all_library_videos(&self) -> Result<Vec<YouTubeVideo>>;
+      pub fn add_video_to_library(&self, video: &YouTubeVideo) -> Result<(), DataStoreError>;
+      pub fn remove_video_from_library(&self, youtube_id: &str) -> Result<(), DataStoreError>;
+      pub fn get_all_library_videos(&self) -> Result<Vec<YouTubeVideo>, DataStoreError>;
       // ... autres méthodes CRUD pour les vidéos si nécessaire ...
 
       // --- Gestion des Playlists ---
-      pub fn create_playlist(&self, name: &str) -> Result<()>;
-      pub fn delete_playlist(&self, playlist_name: &str) -> Result<()>;
-      pub fn rename_playlist(&self, old_name: &str, new_name: &str) -> Result<()>;
-      pub fn get_all_playlists(&self) -> Result<Vec<Playlist>>; // Playlist contiendrait son nom et ses pistes (locales et YouTube)
+      pub fn create_playlist(&self, name: &str) -> Result<i64, DataStoreError>; // Retourne le nouvel ID de la playlist
+      pub fn delete_playlist(&self, playlist_id: i64) -> Result<(), DataStoreError>;
+      pub fn rename_playlist(&self, playlist_id: i64, new_name: &str) -> Result<(), DataStoreError>;
+      pub fn get_all_playlists(&self) -> Result<Vec<Playlist>, DataStoreError>; // Playlist doit contenir son id
 
       // --- Gestion du contenu des Playlists ---
-      pub fn add_youtube_video_to_playlist(&self, playlist_name: &str, youtube_id: &str) -> Result<()>;
-      pub fn add_local_file_to_playlist(&self, playlist_name: &str, file_path: &str) -> Result<()>;
-      pub fn remove_item_from_playlist(&self, playlist_name: &str, position: usize) -> Result<()>;
+      pub fn add_youtube_video_to_playlist(&self, playlist_id: i64, youtube_id: &str) -> Result<(), DataStoreError>;
+      pub fn add_local_file_to_playlist(&self, playlist_id: i64, file_path: &str) -> Result<(), DataStoreError>;
+      pub fn remove_item_from_playlist(&self, playlist_id: i64, position: usize) -> Result<(), DataStoreError>;
       // ... autres méthodes de manipulation de playlist ...
       ```
 
@@ -159,7 +164,7 @@ L'objectif est d'empêcher l'ajout de morceaux déjà présents dans la file d'a
     -   Ajouter une nouvelle méthode pour récupérer tous les IDs YouTube actuellement dans la file d'attente :
       ```rust
       // Récupère l'ensemble de tous les IDs YouTube dans la file d'attente
-      pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>>;
+      pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>, DataStoreError>;
       ```
 
 2.  **Logique pour les pistes YouTube** :
