@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use rusqlite::Connection;
 use thiserror::Error;
@@ -97,5 +97,73 @@ impl DataStore {
         }
 
         Ok(())
+    }
+
+    // --- Queue Metadata ---
+
+    /// Associates a MPD queue song ID with a YouTube video ID.
+    ///
+    /// If a mapping for the `song_id` already exists, it will be replaced.
+    pub fn add_youtube_song_to_queue(
+        &self,
+        song_id: u32,
+        youtube_id: &str,
+    ) -> Result<(), DataStoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO queue_youtube_metadata (song_id, youtube_id) VALUES (?1, ?2)",
+            (song_id, youtube_id),
+        )?;
+        Ok(())
+    }
+
+    /// Retrieves the YouTube video ID for a given MPD queue song ID.
+    pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>, DataStoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT youtube_id FROM queue_youtube_metadata WHERE song_id = ?1")?;
+        let result = stmt.query_row([song_id], |row| row.get(0));
+        match result {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Removes metadata for a list of MPD queue song IDs.
+    ///
+    /// The operation is performed within a single transaction.
+    pub fn remove_songs_from_queue(&self, song_ids: &[u32]) -> Result<(), DataStoreError> {
+        if song_ids.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt =
+                tx.prepare("DELETE FROM queue_youtube_metadata WHERE song_id = ?1")?;
+            for song_id in song_ids {
+                stmt.execute([song_id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Clears all YouTube metadata from the queue.
+    pub fn clear_queue(&self) -> Result<(), DataStoreError> {
+        self.conn.execute("DELETE FROM queue_youtube_metadata", [])?;
+        Ok(())
+    }
+
+    /// Returns a set of all YouTube video IDs currently in the queue.
+    ///
+    /// This is useful for checking for duplicates before adding a new video.
+    pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>, DataStoreError> {
+        let mut stmt = self.conn.prepare("SELECT youtube_id FROM queue_youtube_metadata")?;
+        let ids = stmt.query_map([], |row| row.get(0))?;
+        let mut result = HashSet::new();
+        for id in ids {
+            result.insert(id?);
+        }
+        Ok(result)
     }
 }
