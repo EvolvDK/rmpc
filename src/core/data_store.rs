@@ -13,6 +13,8 @@ pub enum DataStoreError {
     ConfigDirNotFound,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Playlist name '{0}' is already taken")]
+    PlaylistNameTaken(String),
 }
 
 pub struct DataStore {
@@ -226,5 +228,184 @@ impl DataStore {
         }
 
         Ok(videos)
+    }
+
+    // --- Playlist Management ---
+
+    /// Creates a new, empty playlist.
+    ///
+    /// Returns the ID of the newly created playlist.
+    /// Fails if the playlist name is already taken.
+    pub fn create_playlist(&self, name: &str) -> Result<i64, DataStoreError> {
+        match self
+            .conn
+            .execute("INSERT INTO playlists (name) VALUES (?1)", [name])
+        {
+            Ok(_) => Ok(self.conn.last_insert_rowid()),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                Err(DataStoreError::PlaylistNameTaken(name.to_string()))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Deletes a playlist and all its items.
+    pub fn delete_playlist(&self, playlist_id: i64) -> Result<(), DataStoreError> {
+        self.conn
+            .execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])?;
+        Ok(())
+    }
+
+    /// Renames a playlist.
+    ///
+    /// Fails if the new playlist name is already taken.
+    pub fn rename_playlist(&self, playlist_id: i64, new_name: &str) -> Result<(), DataStoreError> {
+        match self.conn.execute(
+            "UPDATE playlists SET name = ?1 WHERE id = ?2",
+            (new_name, playlist_id),
+        ) {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                Err(DataStoreError::PlaylistNameTaken(new_name.to_string()))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Retrieves all playlists with their items.
+    pub fn get_all_playlists(&self) -> Result<Vec<models::Playlist>, DataStoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE")?;
+        let playlists_iter =
+            stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
+
+        let mut playlists = Vec::new();
+
+        for playlist_result in playlists_iter {
+            let (id, name) = playlist_result?;
+            let items = self.get_playlist_items(id)?;
+            playlists.push(models::Playlist { id, name, items });
+        }
+
+        Ok(playlists)
+    }
+
+    /// Retrieves all items for a given playlist.
+    fn get_playlist_items(
+        &self,
+        playlist_id: i64,
+    ) -> Result<Vec<models::PlaylistItem>, DataStoreError> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT
+                pi.file_path,
+                v.youtube_id,
+                v.title,
+                v.channel,
+                v.album,
+                v.duration_secs,
+                v.thumbnail_url
+            FROM playlist_items pi
+            LEFT JOIN videos v ON pi.video_youtube_id = v.youtube_id
+            WHERE pi.playlist_id = ?1
+            ORDER BY pi.position
+            ",
+        )?;
+
+        let items_iter = stmt.query_map([playlist_id], |row| {
+            let file_path: Option<String> = row.get(0)?;
+            if let Some(path) = file_path {
+                return Ok(models::PlaylistItem::Local(path));
+            }
+
+            Ok(models::PlaylistItem::YouTube(models::YouTubeVideo {
+                youtube_id: row.get(1)?,
+                title: row.get(2)?,
+                channel: row.get(3)?,
+                album: row.get(4)?,
+                duration_secs: row.get(5)?,
+                thumbnail_url: row.get(6)?,
+            }))
+        })?;
+
+        let mut items = Vec::new();
+        for item in items_iter {
+            items.push(item?);
+        }
+        Ok(items)
+    }
+
+    /// Adds a YouTube video to the end of a playlist.
+    pub fn add_youtube_video_to_playlist(
+        &mut self,
+        playlist_id: i64,
+        youtube_id: &str,
+    ) -> Result<(), DataStoreError> {
+        self.add_playlist_item(playlist_id, Some(youtube_id), None)
+    }
+
+    /// Adds a local file to the end of a playlist.
+    pub fn add_local_file_to_playlist(
+        &mut self,
+        playlist_id: i64,
+        file_path: &str,
+    ) -> Result<(), DataStoreError> {
+        self.add_playlist_item(playlist_id, None, Some(file_path))
+    }
+
+    /// Adds an item to the end of a playlist.
+    fn add_playlist_item(
+        &mut self,
+        playlist_id: i64,
+        youtube_id: Option<&str>,
+        file_path: Option<&str>,
+    ) -> Result<(), DataStoreError> {
+        let tx = self.conn.transaction()?;
+
+        let position: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_items WHERE playlist_id = ?1",
+            [playlist_id],
+            |row| row.get(0),
+        )?;
+
+        tx.execute(
+            "INSERT INTO playlist_items (playlist_id, position, video_youtube_id, file_path) VALUES (?1, ?2, ?3, ?4)",
+            (playlist_id, position, youtube_id, file_path),
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Removes an item from a specific position in a playlist.
+    ///
+    /// This will shift all subsequent items up.
+    pub fn remove_item_from_playlist(
+        &mut self,
+        playlist_id: i64,
+        position: usize,
+    ) -> Result<(), DataStoreError> {
+        let tx = self.conn.transaction()?;
+        let position = position as i64;
+
+        let changed = tx.execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1 AND position = ?2",
+            (playlist_id, position),
+        )?;
+
+        if changed > 0 {
+            tx.execute(
+                "UPDATE playlist_items SET position = position - 1 WHERE playlist_id = ?1 AND position > ?2",
+                (playlist_id, position),
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
     }
 }

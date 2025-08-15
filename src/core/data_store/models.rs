@@ -7,3 +7,16 @@ pub struct YouTubeVideo {
     pub duration_secs: u32,
     pub thumbnail_url: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaylistItem {
+    YouTube(YouTubeVideo),
+    Local(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Playlist {
+    pub id: i64,
+    pub name: String,
+    pub items: Vec<PlaylistItem>,
+}
