@@ -66,7 +66,7 @@ fn handle_work_request(
         }
         WorkRequest::GetYouTubeStreamUrl { video, context } => {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-            let result = rt.block_on(youtube::get_stream_url(&video.id, youtube_cache_ttl));
+            let result = rt.block_on(youtube::get_stream_url(&video.youtube_id, youtube_cache_ttl));
             let work_done = match result {
                 Ok(url) => WorkDone::YouTubeStreamUrlReady { url, video, context },
                 Err(_) => WorkDone::YouTubeStreamUrlFailed { video, context },

@@ -52,7 +52,6 @@ use crate::{
             SymbolsConfig, TagResolutionStrategy,
         },
     },
-    core::data_store::models::YouTubeVideo,
     ctx::Ctx,
     mpd::{
         commands::{status::OnOffOneshot, Song, State, volume::Bound},

@@ -367,14 +367,14 @@ impl Pane for RmpcPlaylistsPane {
                 if let Some(action) = event.as_common_action(ctx) {
                     match action {
                         CommonAction::Down => {
-                            if let Some(p) = self.get_selected_playlist() {
-                                Self::move_selection(&mut self.content_list_state, p.items.len(), 1);
+                            if let Some(len) = self.get_selected_playlist().map(|p| p.items.len()) {
+                                Self::move_selection(&mut self.content_list_state, len, 1);
                             }
                             self.prepare_preview(ctx)?;
                         }
                         CommonAction::Up => {
-                            if let Some(p) = self.get_selected_playlist() {
-                                Self::move_selection(&mut self.content_list_state, p.items.len(), -1);
+                            if let Some(len) = self.get_selected_playlist().map(|p| p.items.len()) {
+                                Self::move_selection(&mut self.content_list_state, len, -1);
                             }
                             self.prepare_preview(ctx)?;
                         }
