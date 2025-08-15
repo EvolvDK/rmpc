@@ -14,6 +14,7 @@ use tui_input::{backend::crossterm::EventHandler, Input};
 
 use crate::{
     config::keys::CommonAction,
+    core::data_store::models::{PlaylistItem, YouTubeVideo},
     ctx::Ctx,
     shared::{
         events::{AppEvent, WorkRequest},
@@ -26,7 +27,6 @@ use crate::{
         panes::{render_preview_data, Pane, ToPreview},
         UiAppEvent,
     },
-    youtube::{storage, YouTubeVideo},
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -147,7 +147,7 @@ impl YouTubePane {
     // Library methods
     pub fn add_video(&mut self, video: YouTubeVideo) {
         let videos = self.videos_by_channel.entry(video.channel.clone()).or_default();
-        if !videos.iter().any(|v| v.id == video.id) {
+        if !videos.iter().any(|v| v.youtube_id == video.youtube_id) {
             videos.push(video);
             self.update_channels();
         }
@@ -157,7 +157,7 @@ impl YouTubePane {
         let mut empty_channel = None;
         for (channel, videos) in self.videos_by_channel.iter_mut() {
             let video_count = videos.len();
-            videos.retain(|v| v.id != video_id);
+            videos.retain(|v| v.youtube_id != video_id);
             if videos.len() < video_count {
                 // A video was removed, so invalidate selections for this channel
                 self.selected_videos.remove(channel);
@@ -216,10 +216,8 @@ impl YouTubePane {
             return Ok(());
         }
 
-        let items: Vec<_> = selected_videos
-            .iter()
-            .map(|v| storage::PlaylistItem::Youtube { id: v.id.clone() })
-            .collect();
+        let items: Vec<_> =
+            selected_videos.iter().map(|v| PlaylistItem::YouTube(v.clone())).collect();
         let playlists = storage::list_playlists().unwrap_or_default();
 
         let modal = menu::modal::MenuModal::new(ctx)
@@ -430,7 +428,7 @@ impl YouTubePane {
                     KeyCode::Delete => {
                         if let Some(video) = self.get_selected_video() {
                             ctx.app_event_sender.send(AppEvent::UiEvent(
-                                UiAppEvent::YouTubeLibraryRemoveVideo(video.id.clone()),
+                                UiAppEvent::YouTubeLibraryRemoveVideo(video.youtube_id.clone()),
                             ))?;
                         }
                     }

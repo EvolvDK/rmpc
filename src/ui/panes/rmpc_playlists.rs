@@ -11,6 +11,7 @@ use ratatui::{
 
 use crate::{
     config::{keys::CommonAction, tabs::PaneType},
+    core::data_store::models::{PlaylistItem, YouTubeVideo},
     ctx::Ctx,
     mpd::mpd_client::{Filter, MpdClient, Tag},
     shared::{
@@ -25,7 +26,6 @@ use crate::{
         panes::{render_preview_data, Pane, ToPreview},
         UiAppEvent,
     },
-    youtube::{storage, storage::PlaylistItem, YouTubeVideo},
     MpdQueryResult,
 };
 
@@ -83,7 +83,7 @@ impl RmpcPlaylistsPane {
     }
 
     pub fn add_video(&mut self, video: &YouTubeVideo) {
-        self.youtube_library.insert(video.id.clone(), video.clone());
+        self.youtube_library.insert(video.youtube_id.clone(), video.clone());
     }
 
     pub fn remove_video(&mut self, video_id: &str) {
@@ -113,12 +113,12 @@ impl RmpcPlaylistsPane {
 
         if let Some(item) = self.get_highlighted_content_item() {
             match item {
-                PlaylistItem::Youtube { id } => {
-                    if let Some(video) = self.youtube_library.get(id) {
+                PlaylistItem::YouTube(video) => {
+                    if let Some(video) = self.youtube_library.get(&video.youtube_id) {
                         self.preview_data = Some(video.to_preview(key_style, group_style));
                     }
                 }
-                PlaylistItem::Local { path } => {
+                PlaylistItem::Local(path) => {
                     let file = path.clone();
                     ctx.query()
                         .id(PREVIEW)
@@ -260,13 +260,13 @@ impl Pane for RmpcPlaylistsPane {
             .enumerate()
             .map(|(i, item)| {
                 let line = match item {
-                    PlaylistItem::Youtube { id } => {
+                    PlaylistItem::YouTube(video) => {
                         let title = library_videos
-                            .get(id)
+                            .get(&video.youtube_id)
                             .map_or("Unknown YouTube Video", |v| &v.title);
                         format!("[YT] {}", title)
                     }
-                    PlaylistItem::Local { path } => {
+                    PlaylistItem::Local(path) => {
                         let filename = std::path::Path::new(path)
                             .file_name()
                             .and_then(|s| s.to_str())
@@ -296,8 +296,8 @@ impl Pane for RmpcPlaylistsPane {
         } else {
             let preview_text = if let Some(item) = self.get_highlighted_content_item() {
                 match item {
-                    PlaylistItem::Youtube { id } => {
-                        if self.youtube_library.contains_key(id) {
+                    PlaylistItem::YouTube(video) => {
+                        if self.youtube_library.contains_key(&video.youtube_id) {
                             "Loading preview...".to_string()
                         } else {
                             "Could not find video info in library.".to_string()

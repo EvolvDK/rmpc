@@ -27,9 +27,10 @@ use self::{
     panes::Pane,
 };
 use crate::{
+    core::data_store::models::{PlaylistItem, YouTubeVideo},
     MpdQueryResult,
     shared::events::AppEvent,
-    youtube::{self, storage::PlaylistItem, YouTubeVideo},
+    youtube,
     config::{
         Config,
         cli::Args,
@@ -105,7 +106,7 @@ impl<'ui> Ui<'ui> {
             Ok(p.videos_by_channel
                 .values()
                 .flatten()
-                .map(|v| (v.id.clone(), v.clone()))
+                .map(|v| (v.youtube_id.clone(), v.clone()))
                 .collect())
         } else {
             Ok(HashMap::new())
@@ -603,7 +604,7 @@ impl<'ui> Ui<'ui> {
 
     pub fn on_youtube_search_result(
         &mut self,
-        video: crate::youtube::YouTubeVideo,
+        video: YouTubeVideo,
         ctx: &mut Ctx,
     ) -> Result<()> {
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
@@ -622,11 +623,11 @@ impl<'ui> Ui<'ui> {
     pub fn on_youtube_stream_url_ready(
         &mut self,
         url: String,
-        video: crate::youtube::YouTubeVideo,
+        video: YouTubeVideo,
         context: Option<crate::shared::events::RefreshContext>,
         ctx: &mut Ctx,
     ) -> Result<()> {
-        log::info!("Adding YouTube video to queue, ID: {}", video.id);
+        log::info!("Adding YouTube video to queue, ID: {}", video.youtube_id);
         let title = video.title.clone();
         if let Some(context) = context {
             // This is a refresh for an existing song
@@ -662,7 +663,7 @@ impl<'ui> Ui<'ui> {
 
     pub fn on_youtube_stream_url_failed(
         &mut self,
-        video: crate::youtube::YouTubeVideo,
+        video: YouTubeVideo,
         _context: Option<crate::shared::events::RefreshContext>,
         ctx: &mut Ctx,
     ) -> Result<()> {
@@ -678,7 +679,7 @@ impl<'ui> Ui<'ui> {
                         .item("Remove from library?", |_| Ok(()))
                         .item("Yes", move |ctx| {
                             ctx.app_event_sender.send(AppEvent::UiEvent(
-                                UiAppEvent::YouTubeLibraryRemoveVideo(video.id),
+                                UiAppEvent::YouTubeLibraryRemoveVideo(video.youtube_id),
                             ))?;
                             Ok(())
                         })
@@ -846,7 +847,7 @@ impl<'ui> Ui<'ui> {
         let all_video_ids: std::collections::HashSet<String> = library
             .values()
             .flatten()
-            .map(|v| v.id.clone())
+            .map(|v| v.youtube_id.clone())
             .collect();
 
         let mut reader = csv::Reader::from_path(path)?;
@@ -882,7 +883,7 @@ impl<'ui> Ui<'ui> {
         let all_video_ids: std::collections::HashSet<String> = library
             .values()
             .flatten()
-            .map(|v| v.id.clone())
+            .map(|v| v.youtube_id.clone())
             .collect();
         let mut new_videos_count = 0;
 
@@ -925,10 +926,10 @@ impl<'ui> Ui<'ui> {
     }
 
     fn on_save_command(&mut self, name: &str, ctx: &mut Ctx) -> Result<()> {
-        let items: Vec<crate::youtube::storage::PlaylistItem> = ctx
+        let items: Vec<PlaylistItem> = ctx
             .queue
             .iter()
-            .map(|song| crate::youtube::storage::PlaylistItem::Local { path: song.file.clone() })
+            .map(|song| PlaylistItem::Local(song.file.clone()))
             .collect();
 
         if items.is_empty() {
@@ -960,13 +961,14 @@ impl<'ui> Ui<'ui> {
         status_info!("Loading {} items from playlist '{}'...", items.len(), name);
         for item in items {
             match item {
-                crate::youtube::storage::PlaylistItem::Local { path } => {
+                PlaylistItem::Local(path) => {
                     ctx.command(move |client| {
                         client.add(&path, None)?;
                         Ok(())
                     });
                 }
-                crate::youtube::storage::PlaylistItem::Youtube { id } => {
+                PlaylistItem::YouTube(video) => {
+                    let id = video.youtube_id;
                     if let Some(video) = library_videos.get(&id) {
                         ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
                             video: video.clone(),

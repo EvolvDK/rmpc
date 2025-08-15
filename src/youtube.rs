@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use crossbeam::channel::Sender;
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     collections::HashMap,
     sync::Mutex,
@@ -9,25 +9,40 @@ use std::{
 };
 use tokio::{io::{AsyncBufReadExt, BufReader}, process::Command};
 
-use crate::shared::events::{AppEvent, WorkDone};
+use crate::{
+    core::data_store::models::YouTubeVideo,
+    shared::events::{AppEvent, WorkDone},
+};
 
-pub mod storage;
+/// Représente les métadonnées brutes d'une vidéo YouTube, désérialisées depuis yt-dlp.
+#[derive(Debug, Deserialize, Clone)]
+struct YtDlpVideoInfo {
+    id: String,
+    title: String,
+    channel: String,
+    album: Option<String>,
+    duration: f64,
+    thumbnail: Option<String>,
+}
 
-/// Représente les métadonnées essentielles d'une vidéo YouTube.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct YouTubeVideo {
-    pub id: String,
-    pub title: String,
-    pub duration: f64,
-    pub channel: String, // Utilisé comme "artiste"
-    pub thumbnail: String,
+impl From<YtDlpVideoInfo> for YouTubeVideo {
+    fn from(info: YtDlpVideoInfo) -> Self {
+        Self {
+            youtube_id: info.id,
+            title: info.title,
+            channel: info.channel,
+            album: info.album,
+            duration_secs: info.duration as u32,
+            thumbnail_url: info.thumbnail,
+        }
+    }
 }
 
 #[derive(Debug)]
 struct Cache {
-    searches: Mutex<HashMap<String, (Instant, Vec<YouTubeVideo>)>>,
+    searches: Mutex<HashMap<String, (Instant, Vec<YtDlpVideoInfo>)>>,
     stream_urls: Mutex<HashMap<String, (Instant, String)>>,
-    video_info: Mutex<HashMap<String, (Instant, YouTubeVideo)>>,
+    video_info: Mutex<HashMap<String, (Instant, YtDlpVideoInfo)>>,
 }
 
 static CACHE: Lazy<Cache> = Lazy::new(|| Cache {
@@ -45,9 +60,9 @@ pub async fn search(query: &str, ttl: Duration, event_tx: Sender<AppEvent>) -> R
     if ttl > Duration::ZERO {
         if let Some((created, videos)) = CACHE.searches.lock().unwrap().get(query) {
             if created.elapsed() < ttl {
-                for video in videos {
+                for video_info in videos {
                     event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult(
-                        video.clone(),
+                        video_info.clone().into(),
                     ))))?;
                 }
                 event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchFinished)))?;
@@ -68,11 +83,13 @@ pub async fn search(query: &str, ttl: Duration, event_tx: Sender<AppEvent>) -> R
     let mut results_for_cache = Vec::new();
 
     while let Some(line) = reader.next_line().await? {
-        if let Ok(video) = serde_json::from_str::<YouTubeVideo>(&line) {
+        if let Ok(video_info) = serde_json::from_str::<YtDlpVideoInfo>(&line) {
             if ttl > Duration::ZERO {
-                results_for_cache.push(video.clone());
+                results_for_cache.push(video_info.clone());
             }
-            event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult(video))))?;
+            event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult(
+                video_info.into(),
+            ))))?;
         }
     }
 
@@ -139,9 +156,9 @@ pub async fn get_stream_url(video_id: &str, ttl: Duration) -> Result<String> {
 
 pub async fn get_video_info(video_id: &str, ttl: Duration) -> Result<Option<YouTubeVideo>> {
     if ttl > Duration::ZERO {
-        if let Some((created, video)) = CACHE.video_info.lock().unwrap().get(video_id) {
+        if let Some((created, video_info)) = CACHE.video_info.lock().unwrap().get(video_id) {
             if created.elapsed() < ttl {
-                return Ok(Some(video.clone()));
+                return Ok(Some(video_info.clone().into()));
             }
         }
     }
@@ -158,15 +175,15 @@ pub async fn get_video_info(video_id: &str, ttl: Duration) -> Result<Option<YouT
         return Ok(None);
     }
 
-    let video: YouTubeVideo = serde_json::from_slice(&output.stdout)?;
+    let video_info: YtDlpVideoInfo = serde_json::from_slice(&output.stdout)?;
 
     if ttl > Duration::ZERO {
         CACHE
             .video_info
             .lock()
             .unwrap()
-            .insert(video_id.to_string(), (Instant::now(), video.clone()));
+            .insert(video_id.to_string(), (Instant::now(), video_info.clone()));
     }
 
-    Ok(Some(video))
+    Ok(Some(video_info.into()))
 }
