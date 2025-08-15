@@ -438,13 +438,31 @@ where
                 if !enqueue.is_empty() {
                     let queue_len = ctx.queue.len();
                     let current_song_idx = ctx.find_current_song_in_queue().map(|(i, _)| i);
+                    let existing_files: std::collections::HashSet<String> =
+                        ctx.queue.iter().map(|s| s.file.clone()).collect();
+                    let original_len = enqueue.len();
+                    let enqueue: Vec<_> = enqueue
+                        .into_iter()
+                        .filter(|item| match item {
+                            Enqueue::File(path) => !existing_files.contains(path),
+                            _ => true,
+                        })
+                        .collect();
 
-                    ctx.command(move |client| {
-                        let autoplay = options.autoplay(queue_len, current_song_idx, hovered_idx);
-                        client.enqueue_multiple(enqueue, options.position, autoplay)?;
+                    let skipped_count = original_len - enqueue.len();
+                    if skipped_count > 0 {
+                        status_info!("Skipped {} duplicate item(s).", skipped_count);
+                    }
 
-                        Ok(())
-                    });
+                    if !enqueue.is_empty() {
+                        ctx.command(move |client| {
+                            let autoplay =
+                                options.autoplay(queue_len, current_song_idx, hovered_idx);
+                            client.enqueue_multiple(enqueue, options.position, autoplay)?;
+
+                            Ok(())
+                        });
+                    }
                 }
             }
             CommonAction::AddOptions { kind: AddKind::Modal(items) } => {

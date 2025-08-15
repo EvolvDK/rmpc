@@ -203,14 +203,25 @@ impl YouTubePane {
         list_state.select(Some(next as usize));
     }
 
+    fn add_youtube_video_to_queue(&self, video: &YouTubeVideo, ctx: &mut Ctx) -> Result<()> {
+        let queue_yt_ids = ctx.data_store.get_all_queue_youtube_ids()?;
+        if queue_yt_ids.contains(&video.youtube_id) {
+            status_info!("'{}' is already in the queue.", video.title);
+            return Ok(());
+        }
+
+        status_info!("Fetching stream URL for '{}'...", video.title);
+        ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
+            video: video.clone(),
+            context: None,
+        })?;
+        ctx.render()?;
+        Ok(())
+    }
+
     fn add_selected_video_to_queue(&self, ctx: &mut Ctx) -> Result<()> {
         if let Some(video) = self.get_selected_video() {
-            status_info!("Fetching stream URL for '{}'...", video.title);
-            ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                video: video.clone(),
-                context: None,
-            })?;
-            ctx.render()?;
+            self.add_youtube_video_to_queue(video, ctx)?;
         }
         Ok(())
     }
@@ -285,10 +296,7 @@ impl YouTubePane {
                 CommonAction::Confirm => {
                     if let Some(index) = self.search_list_state.selected() {
                         if let Some((_, video)) = self.filtered_search_results.get(index) {
-                            ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                                video: video.clone(),
-                                context: None,
-                            })?;
+                            self.add_youtube_video_to_queue(video, ctx)?;
                         }
                     }
                     event.stop_propagation();

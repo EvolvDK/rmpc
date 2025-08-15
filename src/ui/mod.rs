@@ -714,18 +714,22 @@ impl<'ui> Ui<'ui> {
         }
 
         let library_videos = self.get_youtube_master_library(ctx)?;
-
         let mut added_count = 0;
         let mut skipped_count = 0;
 
+        let (existing_yt_ids, existing_local_files) = if replace {
+            (std::collections::HashSet::new(), std::collections::HashSet::new())
+        } else {
+            (
+                ctx.data_store.get_all_queue_youtube_ids()?,
+                ctx.queue.iter().map(|s| s.file.clone()).collect(),
+            )
+        };
+
         for item in items {
-            let is_duplicate = if replace {
-                false
-            } else {
-                match &item {
-                    PlaylistItem::Local(path) => ctx.queue.iter().any(|s| s.file == *path),
-                    PlaylistItem::YouTube(_) => false, // Handled by the centralized check
-                }
+            let is_duplicate = match &item {
+                PlaylistItem::Local(path) => existing_local_files.contains(path),
+                PlaylistItem::YouTube(video) => existing_yt_ids.contains(&video.youtube_id),
             };
 
             if is_duplicate {
