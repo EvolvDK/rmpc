@@ -14,7 +14,6 @@ use ratatui::{
 
 use super::{CommonAction, Pane};
 use crate::{
-    shared::events::WorkRequest,
     MpdQueryResult,
     config::{
         keys::{
