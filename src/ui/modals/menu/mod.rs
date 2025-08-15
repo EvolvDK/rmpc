@@ -183,7 +183,7 @@ pub fn create_add_modal<'a>(
             }
             Some(section)
         })
-        .list_section(ctx, |section| Some(section.item("Cancel", |_ctx| Ok(()))))
+        .list_section(ctx, |section| Some(section.item("Cancel", |_: &mut Ctx| Ok(()))))
         .build()
 }
 
@@ -267,7 +267,7 @@ pub fn playlist_management_actions(
                                         Ok(())
                                     },
                                 )
-                                .item("No, cancel", |_| Ok(())),
+                                .item("No, cancel", |_: &mut Ctx| Ok(())),
                             )
                         })
                         .build();
@@ -323,7 +323,7 @@ pub fn add_to_playlist_actions(
                     }
                     Some(s)
                 })
-                .list_section(ctx, |s| Some(s.item("Cancel", |_| Ok(()))))
+                .list_section(ctx, |s| Some(s.item("Cancel", |_: &mut Ctx| Ok(()))))
                 .build();
             ctx.app_event_sender
                 .send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;
@@ -421,7 +421,7 @@ pub fn youtube_library_actions(
                                 Ok(())
                             }
                         })
-                        .item("No, cancel", |_| Ok(())),
+                        .item("No, cancel", |_: &mut Ctx| Ok(())),
                     )
                 })
                 .build();
@@ -475,7 +475,7 @@ pub fn add_playlist_to_playlist_actions(
                     }
                     Some(s)
                 })
-                .list_section(ctx, |s| Some(s.item("Cancel", |_| Ok(()))))
+                .list_section(ctx, |s| Some(s.item("Cancel", |_: &mut Ctx| Ok(()))))
                 .build();
             ctx.app_event_sender
                 .send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;

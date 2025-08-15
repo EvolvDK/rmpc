@@ -24,7 +24,7 @@ use crate::{
     },
 };
 
-pub struct InputModal<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> {
+pub struct InputModal<'a, C: FnOnce(&mut Ctx, &str) -> Result<()> + 'a> {
     id: Id,
     button_group_state: ButtonGroupState,
     button_group: ButtonGroup<'a>,
@@ -36,7 +36,7 @@ pub struct InputModal<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> {
     input_label: &'a str,
 }
 
-impl<Callback: FnMut(&mut Ctx, &str) -> Result<()>> std::fmt::Debug for InputModal<'_, Callback> {
+impl<Callback: FnOnce(&mut Ctx, &str) -> Result<()>> std::fmt::Debug for InputModal<'_, Callback> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -46,7 +46,7 @@ impl<Callback: FnMut(&mut Ctx, &str) -> Result<()>> std::fmt::Debug for InputMod
     }
 }
 
-impl<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> InputModal<'a, C> {
+impl<'a, C: FnOnce(&mut Ctx, &str) -> Result<()> + 'a> InputModal<'a, C> {
     pub fn new(ctx: &Ctx) -> Self {
         let mut button_group_state = ButtonGroupState::default();
         let buttons = vec![Button::default().label("Save"), Button::default().label("Cancel")];
@@ -102,7 +102,7 @@ impl<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> InputModal<'a, C> {
     }
 }
 
-impl<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> Modal for InputModal<'a, C> {
+impl<'a, C: FnOnce(&mut Ctx, &str) -> Result<()> + 'a> Modal for InputModal<'a, C> {
     fn id(&self) -> Id {
         self.id
     }
@@ -162,7 +162,7 @@ impl<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> Modal for InputModal<'a, C
                 return Ok(());
             } else if let Some(CommonAction::Confirm) = action {
                 if self.button_group_state.selected == 0 {
-                    if let Some(mut callback) = self.callback.take() {
+                    if let Some(callback) = self.callback.take() {
                         (callback)(ctx, &self.value)?;
                     }
                 }
@@ -200,7 +200,7 @@ impl<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> Modal for InputModal<'a, C
                 }
                 CommonAction::Confirm => {
                     if self.button_group_state.selected == 0 {
-                        if let Some(mut callback) = self.callback.take() {
+                        if let Some(callback) = self.callback.take() {
                             (callback)(ctx, &self.value)?;
                         }
                     }
@@ -230,7 +230,7 @@ impl<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> Modal for InputModal<'a, C
             MouseEventKind::DoubleClick => {
                 match self.button_group.get_button_idx_at(event.into()) {
                     Some(0) => {
-                        if let Some(mut callback) = self.callback.take() {
+                        if let Some(callback) = self.callback.take() {
                             (callback)(ctx, &self.value)?;
                         }
                         self.hide(ctx)?;
