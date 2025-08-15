@@ -43,8 +43,7 @@ impl Default for Focus {
 
 #[derive(Debug, Default)]
 pub struct RmpcPlaylistsPane {
-    playlists: Vec<String>,
-    playlist_content: Vec<PlaylistItem>,
+    playlists: Vec<crate::core::data_store::models::Playlist>,
     youtube_library: HashMap<String, YouTubeVideo>,
     playlist_list_state: ListState,
     content_list_state: ListState,
@@ -58,13 +57,12 @@ pub struct RmpcPlaylistsPane {
 const PREVIEW: &str = "rmpc_playlist_preview";
 
 impl RmpcPlaylistsPane {
-    pub fn new(_ctx: &Ctx) -> Result<Self> {
-        let playlists = storage::list_playlists()?;
-        let youtube_master_library = storage::load_library()?;
-        let youtube_library: HashMap<String, YouTubeVideo> = youtube_master_library
-            .into_values()
-            .flatten()
-            .map(|v| (v.id.clone(), v))
+    pub fn new(ctx: &Ctx) -> Result<Self> {
+        let playlists = ctx.data_store.get_all_playlists()?;
+        let youtube_library_vec = ctx.data_store.get_all_library_videos()?;
+        let youtube_library: HashMap<String, YouTubeVideo> = youtube_library_vec
+            .into_iter()
+            .map(|v| (v.youtube_id.clone(), v))
             .collect();
 
         let mut pane = Self {
@@ -77,7 +75,9 @@ impl RmpcPlaylistsPane {
         };
         if !pane.playlists.is_empty() {
             pane.playlist_list_state.select(Some(0));
-            pane.load_selected_playlist_content()?;
+            if !pane.playlists[0].items.is_empty() {
+                pane.content_list_state.select(Some(0));
+            }
         }
         Ok(pane)
     }
@@ -90,20 +90,6 @@ impl RmpcPlaylistsPane {
         self.youtube_library.remove(video_id);
     }
 
-    fn load_selected_playlist_content(&mut self) -> Result<()> {
-        self.selected_content_indices.clear();
-        if let Some(index) = self.playlist_list_state.selected() {
-            if let Some(name) = self.playlists.get(index) {
-                self.playlist_content = storage::load_playlist(name)?;
-                if !self.playlist_content.is_empty() {
-                    self.content_list_state.select(Some(0));
-                } else {
-                    self.content_list_state.select(None);
-                }
-            }
-        }
-        Ok(())
-    }
 
     fn prepare_preview(&mut self, ctx: &Ctx) -> Result<()> {
         let key_style = ctx.config.theme.preview_label_style;
@@ -140,17 +126,21 @@ impl RmpcPlaylistsPane {
         Ok(())
     }
 
-    fn get_selected_playlist_name(&self) -> Option<&str> {
-        self.playlist_list_state.selected().and_then(|i| self.playlists.get(i)).map(|s| s.as_str())
+    fn get_selected_playlist(&self) -> Option<&crate::core::data_store::models::Playlist> {
+        self.playlist_list_state.selected().and_then(|i| self.playlists.get(i))
     }
 
-    pub fn refresh_playlists(&mut self) -> Result<()> {
-        let prev_selected = self.get_selected_playlist_name().map(|s| s.to_owned());
-        self.playlists = storage::list_playlists()?;
+    fn get_selected_playlist_name(&self) -> Option<&str> {
+        self.get_selected_playlist().map(|p| p.name.as_str())
+    }
+
+    pub fn refresh_playlists(&mut self, ctx: &Ctx) -> Result<()> {
+        let prev_selected_id = self.get_selected_playlist().map(|p| p.id);
+        self.playlists = ctx.data_store.get_all_playlists()?;
 
         let mut new_selection_idx = None;
-        if let Some(prev) = prev_selected {
-            new_selection_idx = self.playlists.iter().position(|p| p == &prev);
+        if let Some(prev_id) = prev_selected_id {
+            new_selection_idx = self.playlists.iter().position(|p| p.id == prev_id);
         }
 
         if new_selection_idx.is_none() && !self.playlists.is_empty() {
@@ -159,10 +149,10 @@ impl RmpcPlaylistsPane {
 
         self.playlist_list_state.select(new_selection_idx);
 
-        if new_selection_idx.is_some() {
-            self.load_selected_playlist_content()?;
+        self.selected_content_indices.clear();
+        if self.get_selected_playlist().is_some_and(|p| !p.items.is_empty()) {
+            self.content_list_state.select(Some(0));
         } else {
-            self.playlist_content.clear();
             self.content_list_state.select(None);
         }
 
@@ -170,22 +160,26 @@ impl RmpcPlaylistsPane {
     }
 
     fn get_selected_content_items(&self) -> Vec<PlaylistItem> {
+        let Some(playlist) = self.get_selected_playlist() else {
+            return Vec::new();
+        };
         if self.selected_content_indices.is_empty() {
             self.content_list_state
                 .selected()
-                .and_then(|i| self.playlist_content.get(i).cloned())
+                .and_then(|i| playlist.items.get(i).cloned())
                 .into_iter()
                 .collect()
         } else {
             self.selected_content_indices
                 .iter()
-                .filter_map(|i| self.playlist_content.get(*i).cloned())
+                .filter_map(|i| playlist.items.get(*i).cloned())
                 .collect()
         }
     }
 
     fn get_highlighted_content_item(&self) -> Option<&PlaylistItem> {
-        self.content_list_state.selected().and_then(|i| self.playlist_content.get(i))
+        self.get_selected_playlist()
+            .and_then(|p| self.content_list_state.selected().and_then(|i| p.items.get(i)))
     }
 
     fn move_selection(list_state: &mut ListState, count: usize, change: isize) {
@@ -235,7 +229,7 @@ impl Pane for RmpcPlaylistsPane {
                 ctx.config.as_border_style()
             });
         let playlist_items: Vec<ListItem> =
-            self.playlists.iter().map(|p| ListItem::new(p.as_str())).collect();
+            self.playlists.iter().map(|p| ListItem::new(p.name.as_str())).collect();
         let playlist_list = List::new(playlist_items)
             .block(playlists_block)
             .highlight_style(ctx.config.theme.highlighted_item_style);
@@ -255,7 +249,9 @@ impl Pane for RmpcPlaylistsPane {
             self.youtube_library.iter().map(|(id, v)| (id.clone(), v)).collect();
 
         let content_items: Vec<ListItem> = self
-            .playlist_content
+            .get_selected_playlist()
+            .map(|p| p.items.as_slice())
+            .unwrap_or(&[])
             .iter()
             .enumerate()
             .map(|(i, item)| {
@@ -332,12 +328,17 @@ impl Pane for RmpcPlaylistsPane {
                     }
                 }
                 if prev_selected != self.playlist_list_state.selected() {
-                    self.load_selected_playlist_content()?;
+                    self.selected_content_indices.clear();
+                    if self.get_selected_playlist().is_some_and(|p| !p.items.is_empty()) {
+                        self.content_list_state.select(Some(0));
+                    } else {
+                        self.content_list_state.select(None);
+                    }
                     self.prepare_preview(ctx)?;
                 }
                 match event.code() {
                     KeyCode::Right | KeyCode::Enter => {
-                        if !self.playlist_content.is_empty() {
+                        if self.get_selected_playlist().is_some_and(|p| !p.items.is_empty()) {
                             self.focus = Focus::Content;
                         }
                     }
@@ -366,19 +367,15 @@ impl Pane for RmpcPlaylistsPane {
                 if let Some(action) = event.as_common_action(ctx) {
                     match action {
                         CommonAction::Down => {
-                            Self::move_selection(
-                                &mut self.content_list_state,
-                                self.playlist_content.len(),
-                                1,
-                            );
+                            if let Some(p) = self.get_selected_playlist() {
+                                Self::move_selection(&mut self.content_list_state, p.items.len(), 1);
+                            }
                             self.prepare_preview(ctx)?;
                         }
                         CommonAction::Up => {
-                            Self::move_selection(
-                                &mut self.content_list_state,
-                                self.playlist_content.len(),
-                                -1,
-                            );
+                            if let Some(p) = self.get_selected_playlist() {
+                                Self::move_selection(&mut self.content_list_state, p.items.len(), -1);
+                            }
                             self.prepare_preview(ctx)?;
                         }
                         CommonAction::Confirm => {
@@ -417,7 +414,12 @@ impl Pane for RmpcPlaylistsPane {
                     let selected_index = self.playlist_list_state.offset() + clicked_row as usize;
                     if selected_index < self.playlists.len() {
                         self.playlist_list_state.select(Some(selected_index));
-                        self.load_selected_playlist_content()?;
+                        self.selected_content_indices.clear();
+                        if self.get_selected_playlist().is_some_and(|p| !p.items.is_empty()) {
+                            self.content_list_state.select(Some(0));
+                        } else {
+                            self.content_list_state.select(None);
+                        }
                         self.prepare_preview(ctx)?;
                     }
 
@@ -489,7 +491,10 @@ impl Pane for RmpcPlaylistsPane {
                     self.focus = Focus::Content;
                     let clicked_row = pos.y.saturating_sub(self.content_list_area.y + 1);
                     let selected_index = self.content_list_state.offset() + clicked_row as usize;
-                    if selected_index < self.playlist_content.len() {
+                    if self
+                        .get_selected_playlist()
+                        .is_some_and(|p| selected_index < p.items.len())
+                    {
                         self.content_list_state.select(Some(selected_index));
                         self.prepare_preview(ctx)?;
                     }

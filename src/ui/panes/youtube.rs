@@ -81,8 +81,12 @@ impl std::fmt::Debug for YouTubePane {
 }
 
 impl YouTubePane {
-    pub fn new(_ctx: &Ctx) -> Result<Self> {
-        let videos_by_channel = storage::load_library()?;
+    pub fn new(ctx: &Ctx) -> Result<Self> {
+        let videos = ctx.data_store.get_all_library_videos()?;
+        let mut videos_by_channel: BTreeMap<String, Vec<YouTubeVideo>> = BTreeMap::new();
+        for video in videos {
+            videos_by_channel.entry(video.channel.clone()).or_default().push(video);
+        }
         let channels = videos_by_channel.keys().cloned().collect();
         Ok(Self {
             focus: Focus::default(),
@@ -218,7 +222,12 @@ impl YouTubePane {
 
         let items: Vec<_> =
             selected_videos.iter().map(|v| PlaylistItem::YouTube(v.clone())).collect();
-        let playlists = storage::list_playlists().unwrap_or_default();
+        let playlists: Vec<_> = ctx
+            .data_store
+            .get_all_playlists()?
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
 
         let modal = menu::modal::MenuModal::new(ctx)
             .list_section(ctx, menu::queue_actions(items.clone()))

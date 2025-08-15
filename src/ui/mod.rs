@@ -128,26 +128,6 @@ impl<'ui> Ui<'ui> {
         Ok(())
     }
 
-    fn resolve_and_sync_youtube_videos(
-        &mut self,
-        items: &[PlaylistItem],
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        let youtube_master_library = self.get_youtube_master_library(ctx)?;
-
-        let videos_to_sync: Vec<_> = items
-            .iter()
-            .filter_map(|item| {
-                if let PlaylistItem::Youtube { id } = item {
-                    youtube_master_library.get(id).cloned()
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        self.sync_videos_to_playlists_pane(&videos_to_sync, ctx)
-    }
 
     pub fn new(ctx: &Ctx) -> Result<Ui<'ui>> {
         Ok(Self {
@@ -733,17 +713,7 @@ impl<'ui> Ui<'ui> {
             });
         }
 
-        let library_videos: HashMap<String, YouTubeVideo> =
-            if let Ok(Panes::YouTube(yt_pane)) = self.panes.get_mut(&PaneType::YouTube, ctx) {
-                yt_pane
-                    .videos_by_channel
-                    .values()
-                    .flatten()
-                    .map(|v| (v.id.clone(), v.clone()))
-                    .collect()
-            } else {
-                HashMap::new()
-            };
+        let library_videos = self.get_youtube_master_library(ctx)?;
 
         let mut added_count = 0;
         let mut skipped_count = 0;
@@ -753,8 +723,8 @@ impl<'ui> Ui<'ui> {
                 false
             } else {
                 match &item {
-                    PlaylistItem::Local { path } => ctx.queue.iter().any(|s| s.file == *path),
-                    PlaylistItem::Youtube { .. } => false, // Handled by the centralized check
+                    PlaylistItem::Local(path) => ctx.queue.iter().any(|s| s.file == *path),
+                    PlaylistItem::YouTube(_) => false, // Handled by the centralized check
                 }
             };
 
@@ -765,14 +735,14 @@ impl<'ui> Ui<'ui> {
 
             added_count += 1;
             match item {
-                PlaylistItem::Local { path } => {
+                PlaylistItem::Local(path) => {
                     ctx.command(move |client| {
                         client.add(&path, None)?;
                         Ok(())
                     });
                 }
-                PlaylistItem::Youtube { id } => {
-                    if let Some(video) = library_videos.get(&id) {
+                PlaylistItem::YouTube(video) => {
+                    if let Some(video) = library_videos.get(&video.youtube_id) {
                         ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
                             video: video.clone(),
                             context: None,
@@ -780,7 +750,7 @@ impl<'ui> Ui<'ui> {
                     } else {
                         status_warn!(
                             "Could not find YouTube video with ID {} in library, skipping.",
-                            id
+                            video.youtube_id
                         );
                         added_count -= 1; // It was not actually added
                     }
@@ -948,10 +918,11 @@ impl<'ui> Ui<'ui> {
     }
 
     fn on_load_command(&mut self, name: &str, ctx: &mut Ctx) -> Result<()> {
-        let items = match crate::youtube::storage::load_playlist(name) {
-            Ok(items) => items,
-            Err(e) => {
-                status_error!("Failed to load playlist '{}': {}", name, e);
+        let all_playlists = ctx.data_store.get_all_playlists()?;
+        let items = match all_playlists.into_iter().find(|p| p.name == name) {
+            Some(p) => p.items,
+            None => {
+                status_error!("Failed to load playlist '{}': not found.", name);
                 return Ok(());
             }
         };
