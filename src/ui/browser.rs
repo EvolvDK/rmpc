@@ -19,7 +19,7 @@ use crate::{
     mpd::{client::Client, commands::Song, mpd_client::MpdClient},
     shared::{
         key_event::KeyEvent,
-        macros::modal,
+        macros::{modal, status_info},
         mouse_event::{MouseEvent, MouseEventKind, calculate_scrollbar_position},
         mpd_client_ext::{Autoplay, Enqueue, MpdClientExt, MpdDelete},
         mpd_query::EXTERNAL_COMMAND,
@@ -444,7 +444,7 @@ where
                     let enqueue: Vec<_> = enqueue
                         .into_iter()
                         .filter(|item| match item {
-                            Enqueue::File(path) => !existing_files.contains(path),
+                            Enqueue::File { path } => !existing_files.contains(path),
                             _ => true,
                         })
                         .collect();
@@ -533,7 +533,7 @@ where
                         let enqueue: Vec<_> = cloned_items
                             .into_iter()
                             .filter(|item| match item {
-                                Enqueue::File(path) => !existing_files.contains(path),
+                                Enqueue::File { path } => !existing_files.contains(path),
                                 _ => true,
                             })
                             .collect();

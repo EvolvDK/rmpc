@@ -176,7 +176,7 @@ pub fn create_add_modal<'a>(
                         let enqueue: Vec<_> = enqueue
                             .into_iter()
                             .filter(|item| match item {
-                                Enqueue::File(path) => !existing_files.contains(path),
+                                Enqueue::File { path } => !existing_files.contains(path),
                                 _ => true,
                             })
                             .collect();
