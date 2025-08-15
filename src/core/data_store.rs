@@ -124,10 +124,9 @@ impl DataStore {
 
     /// Retrieves the YouTube video ID for a given MPD queue song ID.
     pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>, DataStoreError> {
-        let mut stmt = self
-            .conn
-            .borrow()
-            .prepare("SELECT youtube_id FROM queue_youtube_metadata WHERE song_id = ?1")?;
+        let conn = self.conn.borrow();
+        let mut stmt =
+            conn.prepare("SELECT youtube_id FROM queue_youtube_metadata WHERE song_id = ?1")?;
         let result = stmt.query_row([song_id], |row| row.get(0));
         match result {
             Ok(id) => Ok(Some(id)),
@@ -143,7 +142,8 @@ impl DataStore {
         if song_ids.is_empty() {
             return Ok(());
         }
-        let tx = self.conn.borrow_mut().transaction()?;
+        let mut conn = self.conn.borrow_mut();
+        let tx = conn.transaction()?;
         {
             let mut stmt =
                 tx.prepare("DELETE FROM queue_youtube_metadata WHERE song_id = ?1")?;
@@ -167,10 +167,8 @@ impl DataStore {
     ///
     /// This is useful for checking for duplicates before adding a new video.
     pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>, DataStoreError> {
-        let mut stmt = self
-            .conn
-            .borrow()
-            .prepare("SELECT youtube_id FROM queue_youtube_metadata")?;
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT youtube_id FROM queue_youtube_metadata")?;
         let ids = stmt.query_map([], |row| row.get(0))?;
         let mut result = HashSet::new();
         for id in ids {
@@ -181,10 +179,8 @@ impl DataStore {
 
     /// Returns a set of all MPD song IDs for which metadata is stored.
     pub fn get_all_queue_song_ids(&self) -> Result<HashSet<u32>, DataStoreError> {
-        let mut stmt = self
-            .conn
-            .borrow()
-            .prepare("SELECT song_id FROM queue_youtube_metadata")?;
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT song_id FROM queue_youtube_metadata")?;
         let ids = stmt.query_map([], |row| row.get(0))?;
         let mut result = HashSet::new();
         for id in ids {
@@ -226,7 +222,8 @@ impl DataStore {
 
     /// Retrieves all YouTube videos from the library.
     pub fn get_all_library_videos(&self) -> Result<Vec<models::YouTubeVideo>, DataStoreError> {
-        let mut stmt = self.conn.borrow().prepare(
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare(
             "
             SELECT youtube_id, title, channel, album, duration_secs, thumbnail_url
             FROM videos
@@ -300,10 +297,9 @@ impl DataStore {
 
     /// Retrieves all playlists with their items.
     pub fn get_all_playlists(&self) -> Result<Vec<models::Playlist>, DataStoreError> {
-        let mut stmt = self
-            .conn
-            .borrow()
-            .prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE")?;
+        let conn = self.conn.borrow();
+        let mut stmt =
+            conn.prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE")?;
         let playlists_iter =
             stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
 
@@ -323,7 +319,8 @@ impl DataStore {
         &self,
         playlist_id: i64,
     ) -> Result<Vec<models::PlaylistItem>, DataStoreError> {
-        let mut stmt = self.conn.borrow().prepare(
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare(
             "
             SELECT
                 pi.file_path,
@@ -388,7 +385,8 @@ impl DataStore {
         youtube_id: Option<&str>,
         file_path: Option<&str>,
     ) -> Result<(), DataStoreError> {
-        let tx = self.conn.borrow_mut().transaction()?;
+        let mut conn = self.conn.borrow_mut();
+        let tx = conn.transaction()?;
 
         let position: i64 = tx.query_row(
             "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_items WHERE playlist_id = ?1",
@@ -413,7 +411,8 @@ impl DataStore {
         playlist_id: i64,
         position: usize,
     ) -> Result<(), DataStoreError> {
-        let tx = self.conn.borrow_mut().transaction()?;
+        let mut conn = self.conn.borrow_mut();
+        let tx = conn.transaction()?;
         let position = position as i64;
 
         let changed = tx.execute(
