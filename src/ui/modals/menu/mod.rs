@@ -9,8 +9,10 @@ use ratatui::{
     widgets::Widget,
 };
 
+use anyhow::Context as _;
 use crate::{
     config::keys::actions::AddOpts,
+    core::data_store::models::{PlaylistItem, YouTubeVideo},
     ctx::Ctx,
     shared::{
         events::AppEvent,
@@ -19,7 +21,6 @@ use crate::{
         mpd_client_ext::{Enqueue, MpdClientExt as _},
     },
     ui::{modals::input_modal::InputModal, UiAppEvent},
-    youtube::storage::{self, PlaylistItem},
 };
 
 mod input_section;
@@ -228,9 +229,25 @@ pub fn playlist_management_actions(
                                     format!("Yes, remove {} items", remove_items.len()),
                                     move |ctx| {
                                         match (|| -> Result<()> {
-                                            let mut content = storage::load_playlist(&p_name)?;
-                                            content.retain(|item| !remove_items.contains(item));
-                                            storage::save_playlist(&p_name, &content)?;
+                                            let playlist = ctx
+                                                .data_store
+                                                .get_all_playlists()?
+                                                .into_iter()
+                                                .find(|p| p.name == p_name)
+                                                .context("Playlist not found")?;
+
+                                            let positions_to_remove: Vec<_> = playlist
+                                                .items
+                                                .iter()
+                                                .enumerate()
+                                                .filter(|(_, item)| remove_items.contains(item))
+                                                .map(|(i, _)| i)
+                                                .collect();
+
+                                            for pos in positions_to_remove.iter().rev() {
+                                                ctx.data_store
+                                                    .remove_item_from_playlist(playlist.id, *pos)?;
+                                            }
                                             Ok(())
                                         })() {
                                             Ok(_) => {
@@ -352,19 +369,31 @@ pub fn playlist_queue_actions(
         Some(
             section
                 .item("Add to queue", move |ctx| {
-                    match storage::load_playlist(&p_name_add) {
-                        Ok(items) => ctx.app_event_sender.send(AppEvent::UiEvent(
-                            UiAppEvent::AddPlaylistItemsToQueue(items),
-                        ))?,
+                    match ctx.data_store.get_all_playlists() {
+                        Ok(playlists) => {
+                            if let Some(p) = playlists.into_iter().find(|p| p.name == p_name_add) {
+                                ctx.app_event_sender.send(AppEvent::UiEvent(
+                                    UiAppEvent::AddPlaylistItemsToQueue(p.items),
+                                ))?;
+                            } else {
+                                status_error!("Playlist '{}' not found.", p_name_add);
+                            }
+                        }
                         Err(e) => status_error!("Failed to load playlist: {e}"),
                     }
                     Ok(())
                 })
                 .item("Replace queue", move |ctx| {
-                    match storage::load_playlist(&p_name_replace) {
-                        Ok(items) => ctx.app_event_sender.send(AppEvent::UiEvent(
-                            UiAppEvent::ReplaceQueueWithPlaylistItems(items),
-                        ))?,
+                    match ctx.data_store.get_all_playlists() {
+                        Ok(playlists) => {
+                            if let Some(p) = playlists.into_iter().find(|p| p.name == p_name_replace) {
+                                ctx.app_event_sender.send(AppEvent::UiEvent(
+                                    UiAppEvent::ReplaceQueueWithPlaylistItems(p.items),
+                                ))?;
+                            } else {
+                                status_error!("Playlist '{}' not found.", p_name_replace);
+                            }
+                        }
                         Err(e) => status_error!("Failed to load playlist: {e}"),
                     }
                     Ok(())
@@ -374,7 +403,7 @@ pub fn playlist_queue_actions(
 }
 
 pub fn youtube_library_actions(
-    videos: Vec<crate::youtube::YouTubeVideo>,
+    videos: Vec<YouTubeVideo>,
 ) -> impl FnOnce(ListSection) -> Option<ListSection> {
     move |section| {
         Some(section.item("Remove from library", move |ctx| {
@@ -386,7 +415,7 @@ pub fn youtube_library_actions(
                             move |ctx| {
                                 for video in videos {
                                     ctx.app_event_sender.send(AppEvent::UiEvent(
-                                        UiAppEvent::YouTubeLibraryRemoveVideo(video.id),
+                                        UiAppEvent::YouTubeLibraryRemoveVideo(video.youtube_id),
                                     ))?;
                                 }
                                 Ok(())
@@ -419,14 +448,23 @@ pub fn add_playlist_to_playlist_actions(
                         let source_p_name = source_playlist_name.clone();
                         let target_p_name = p_name.clone();
                         s = s.item(p_name, move |ctx| {
-                            match storage::load_playlist(&source_p_name) {
-                                Ok(source_content) => {
-                                    ctx.app_event_sender.send(AppEvent::UiEvent(
-                                        UiAppEvent::AddItemsToPlaylist {
-                                            name: target_p_name,
-                                            items: source_content,
-                                        },
-                                    ))?;
+                            match ctx.data_store.get_all_playlists() {
+                                Ok(playlists) => {
+                                    if let Some(p) =
+                                        playlists.into_iter().find(|p| p.name == source_p_name)
+                                    {
+                                        ctx.app_event_sender.send(AppEvent::UiEvent(
+                                            UiAppEvent::AddItemsToPlaylist {
+                                                name: target_p_name,
+                                                items: p.items,
+                                            },
+                                        ))?;
+                                    } else {
+                                        status_error!(
+                                            "Source playlist '{}' not found.",
+                                            source_p_name
+                                        );
+                                    }
                                 }
                                 Err(e) => {
                                     status_error!("Failed to load playlist to add: {e}")
@@ -457,8 +495,27 @@ pub fn playlist_cloning_actions(
                 .on_confirm(move |ctx, new_name| {
                     if !new_name.is_empty() {
                         match (|| -> Result<()> {
-                            let content = storage::load_playlist(&p_name)?;
-                            storage::save_playlist(new_name, &content)?;
+                            let playlists = ctx.data_store.get_all_playlists()?;
+                            let source_playlist = playlists
+                                .into_iter()
+                                .find(|p| p.name == p_name)
+                                .context("Source playlist not found")?;
+
+                            let new_playlist_id = ctx.data_store.create_playlist(new_name)?;
+                            for item in source_playlist.items {
+                                match item {
+                                    PlaylistItem::Local(path) => {
+                                        ctx.data_store
+                                            .add_local_file_to_playlist(new_playlist_id, &path)?;
+                                    }
+                                    PlaylistItem::YouTube(video) => {
+                                        ctx.data_store.add_youtube_video_to_playlist(
+                                            new_playlist_id,
+                                            &video.youtube_id,
+                                        )?;
+                                    }
+                                }
+                            }
                             Ok(())
                         })() {
                             Ok(_) => {
