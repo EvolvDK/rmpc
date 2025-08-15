@@ -242,7 +242,7 @@ pub trait MpdClient: Sized {
     fn delete_id(&mut self, id: u32) -> MpdResult<()>;
     fn delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()>;
     fn playlist_id(&mut self, song_id: u32) -> MpdResult<Option<Song>>;
-    fn playlist_info(&mut self, fetch_stickers: bool) -> MpdResult<Option<Vec<Song>>>;
+    fn playlist_info(&mut self) -> MpdResult<Option<Vec<Song>>>;
     fn find(&mut self, filter: &[Filter<'_>]) -> MpdResult<Vec<Song>>;
     fn search(&mut self, filter: &[Filter<'_>]) -> MpdResult<Vec<Song>>;
     fn move_in_queue(&mut self, from: SingleOrRange, to: QueuePosition) -> MpdResult<()>;
@@ -503,50 +503,11 @@ impl MpdClient for Client<'_> {
     }
 
     fn playlist_id(&mut self, song_id: u32) -> MpdResult<Option<Song>> {
-        let mut song: Option<Song> =
-            self.send_playlist_id(song_id).and_then(|()| self.read_opt_response())?;
-
-        if let Some(song) = song.as_mut() {
-            if let Ok(stickers) = self.list_stickers(&song.file) {
-                song.stickers = Some(stickers.0);
-            }
-        }
-
-        Ok(song)
+        self.send_playlist_id(song_id).and_then(|()| self.read_opt_response())
     }
 
-    fn playlist_info(&mut self, fetch_stickers: bool) -> MpdResult<Option<Vec<Song>>> {
-        let songs: Option<Vec<Song>> =
-            self.send_playlist_info().and_then(|()| self.read_opt_response())?;
-
-        if !fetch_stickers {
-            return Ok(songs);
-        }
-
-        let Some(mut songs) = songs else {
-            return Ok(songs);
-        };
-
-        let mut stickers = match self
-            .list_stickers_multiple(&songs.iter().map(|song| song.file.as_str()).collect_vec())
-        {
-            Ok(stickers) => stickers,
-            Err(err) => {
-                log::error!(err:?; "Failed to fetch stickers for playlist_info");
-                return Ok(Some(songs));
-            }
-        };
-
-        if songs.len() != stickers.len() {
-            log::error!(songs_len = songs.len(), stickers_len = stickers.len(); "Received different number of sticker responses than requested songs");
-            return Ok(Some(songs));
-        }
-
-        for (stickers, song) in stickers.iter_mut().zip(songs.iter_mut()) {
-            song.stickers = Some(std::mem::take(&mut stickers.0));
-        }
-
-        Ok(Some(songs))
+    fn playlist_info(&mut self) -> MpdResult<Option<Vec<Song>>> {
+        self.send_playlist_info().and_then(|()| self.read_opt_response())
     }
 
     /// Search the database for songs matching FILTER

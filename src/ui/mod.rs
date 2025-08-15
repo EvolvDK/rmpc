@@ -636,7 +636,6 @@ impl<'ui> Ui<'ui> {
                         .add_id(&url, Some(QueuePosition::Absolute(context.position)))?
                         .id
                         .context("MPD did not return an ID for the refreshed song")?;
-                    client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
 
                     if context.play_after_refresh {
                         client.play_id(song_id)?;
@@ -647,24 +646,11 @@ impl<'ui> Ui<'ui> {
             status_info!("Refreshed '{}' in queue", title);
         } else {
             // This is a new song
-            let already_in_queue = ctx.queue.iter().any(|s| {
-                s.metadata
-                    .get("Comment")
-                    .and_then(|tag| tag.first().strip_prefix("rmpc_yt_id="))
-                    .is_some_and(|found_id| found_id == video.id)
-            });
-
-            if already_in_queue {
-                status_warn!("'{}' est déjà dans la file d'attente.", title);
-                return Ok(ctx.render()?);
-            }
-
             ctx.query().id("add_youtube_song").query(move |client| {
                 let song_id = client
                     .add_id(&url, None)?
                     .id
                     .context("MPD did not return an ID for the added song")?;
-                client.set_sticker(&url, "rmpc_yt_id", &video.id)?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
             status_info!("Added '{}' to queue", title);
@@ -940,15 +926,7 @@ impl<'ui> Ui<'ui> {
         let items: Vec<crate::youtube::storage::PlaylistItem> = ctx
             .queue
             .iter()
-            .map(|song| {
-                if let Some(id) =
-                    song.metadata.get("Comment").and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
-                {
-                    crate::youtube::storage::PlaylistItem::Youtube { id: id.to_string() }
-                } else {
-                    crate::youtube::storage::PlaylistItem::Local { path: song.file.clone() }
-                }
-            })
+            .map(|song| crate::youtube::storage::PlaylistItem::Local { path: song.file.clone() })
             .collect();
 
         if items.is_empty() {

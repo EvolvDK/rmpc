@@ -214,16 +214,8 @@ impl QueuePane {
                         .queue
                         .iter()
                         .map(|song| {
-                            if let Some(id) = song
-                                .metadata
-                                .get("Comment")
-                                .and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
-                            {
-                                crate::youtube::storage::PlaylistItem::Youtube { id: id.to_string() }
-                            } else {
-                                crate::youtube::storage::PlaylistItem::Local {
-                                    path: song.file.clone(),
-                                }
+                            crate::youtube::storage::PlaylistItem::Local {
+                                path: song.file.clone(),
                             }
                         })
                         .collect();
@@ -267,16 +259,8 @@ impl QueuePane {
                                     .queue
                                     .iter()
                                     .map(|song| {
-                                        if let Some(id) = song.metadata.get("Comment").and_then(|t| {
-                                            t.first().strip_prefix("rmpc_yt_id=")
-                                        }) {
-                                            crate::youtube::storage::PlaylistItem::Youtube {
-                                                id: id.to_string(),
-                                            }
-                                        } else {
-                                            crate::youtube::storage::PlaylistItem::Local {
-                                                path: song.file.clone(),
-                                            }
+                                        crate::youtube::storage::PlaylistItem::Local {
+                                            path: song.file.clone(),
                                         }
                                     })
                                     .collect();
@@ -867,59 +851,22 @@ impl Pane for QueuePane {
                     );
                 }
                 QueueActions::Play => {
-                    if let Some(idx) = self.scrolling_state.get_selected() {
-                        if let Some(selected_song) = ctx.queue.get(idx).cloned() {
-                            if let Some(video_id) = selected_song
-                                .metadata
-                                .get("Comment")
-                                .and_then(|t| t.first().strip_prefix("rmpc_yt_id="))
-                            {
-                                let video = crate::youtube::YouTubeVideo {
-                                    id: video_id.to_string(),
-                                    title: selected_song
-                                        .metadata
-                                        .get("title")
-                                        .map_or_else(String::new, |t| t.first().to_string()),
-                                    channel: selected_song
-                                        .metadata
-                                        .get("artist")
-                                        .map_or_else(String::new, |t| t.first().to_string()),
-                                    duration: selected_song
-                                        .duration
-                                        .unwrap_or_default()
-                                        .as_secs_f64(),
-                                    thumbnail: String::new(),
-                                };
-                                // It's a YouTube video, dispatch a work request to refresh URL and play
-                                let context = Some(crate::shared::events::RefreshContext {
-                                    old_song_id: selected_song.id,
-                                    position: idx,
-                                    play_after_refresh: true,
-                                });
-                                if let Err(e) = ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                                    video: video.clone(),
-                                    context,
-                                }) {
-                                    status_error!("Failed to send work request: {}", e);
-                                } else {
-                                    status_info!("Refreshing and playing '{}'...", video.title);
-                                }
-                            } else {
-                                // It's a local file, play it directly
-                                let id = selected_song.id;
-                                ctx.query()
-                                    .id(GLOBAL_STATUS_UPDATE)
-                                    .replace_id("play_and_get_status")
-                                    .query(move |client| {
-                                        client.play_id(id)?;
-                                        let status = client.get_status()?;
-                                        Ok(MpdQueryResult::Status {
-                                            data: status,
-                                            source_event: None,
-                                        })
-                                    });
-                            }
-                        }
+                    if let Some(selected_song) =
+                        self.scrolling_state.get_selected().and_then(|idx| ctx.queue.get(idx))
+                    {
+                        // It's a local file, play it directly
+                        let id = selected_song.id;
+                        ctx.query()
+                            .id(GLOBAL_STATUS_UPDATE)
+                            .replace_id("play_and_get_status")
+                            .query(move |client| {
+                                client.play_id(id)?;
+                                let status = client.get_status()?;
+                                Ok(MpdQueryResult::Status {
+                                    data: status,
+                                    source_event: None,
+                                })
+                            });
                     }
                 }
                 QueueActions::JumpToCurrent => {
