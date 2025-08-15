@@ -1,16 +1,20 @@
-# Plan d'implémentation : Magasin de métadonnées externe
+# Plan d'implémentation : Système de persistance de données avec SQLite
 
-Ce document décrit les étapes nécessaires pour implémenter un magasin de métadonnées persistant en utilisant une base de données SQLite. Cette approche remplacera les tentatives précédentes (tags `Comment` et `stickers`) pour associer un ID YouTube aux pistes dans la file d'attente MPD.
+Ce document décrit les étapes nécessaires pour implémenter un système de persistance de données unifié en utilisant une base de données SQLite. Ce système remplacera les approches précédentes (tags `Comment`, `stickers`) pour les métadonnées de la file d'attente, et migrera également le stockage de la bibliothèque YouTube et des playlists depuis des fichiers JSON.
 
 ## 1. Objectifs
 
 ### Objectif principal
-Créer un système robuste et flexible pour stocker les métadonnées des pistes YouTube (en commençant par l'ID YouTube) qui ne sont pas nativement gérées par MPD pour les flux.
+Créer un système de stockage unique, robuste et performant basé sur SQLite pour toutes les données persistantes de l'application, incluant :
+1.  Les métadonnées des pistes YouTube dans la file d'attente MPD (ID YouTube).
+2.  La bibliothèque de vidéos YouTube (`youtube_library.json`).
+3.  Les playlists YouTube de l'utilisateur (`yt-playlists.json`).
 
 ### Objectifs secondaires
+- **Consolidation** : Unifier la gestion des données dans un seul module pour améliorer la cohérence et la maintenabilité.
+- **Performance et Scalabilité** : Remplacer le parsing JSON par des requêtes SQL pour une meilleure performance, surtout avec de grandes bibliothèques.
+- **Intégrité des données** : Utiliser les fonctionnalités de SQLite (transactions, contraintes) pour garantir la robustesse des données.
 - **Découplage** : Rendre la gestion des métadonnées indépendante des fonctionnalités spécifiques de MPD.
-- **Persistance** : Permettre aux métadonnées de persister au-delà de la session actuelle de la file d'attente.
-- **Maintenabilité** : Centraliser la logique de gestion des métadonnées dans un seul module dédié.
 
 ### Objectif de nettoyage
 Éliminer complètement le code des approches précédentes qui se sont avérées inefficaces :
@@ -42,33 +46,63 @@ Cette étape consiste à construire le cœur du nouveau système.
     -   Créer un nouveau fichier : `src/core/metadata_store.rs`.
 
 3.  **Définir la structure de la base de données** :
-    -   Le module initialisera une base de données SQLite (par ex. `~/.config/rmpc/metadata.db`).
-    -   Il créera une table si elle n'existe pas :
+    -   Le module initialisera une base de données SQLite unique (par ex. `~/.config/rmpc/rmpc.db`).
+    -   Il créera les tables suivantes si elles n'existent pas :
       ```sql
-      CREATE TABLE IF NOT EXISTS youtube_metadata (
-          song_id     INTEGER PRIMARY KEY,
+      -- Pour les métadonnées des pistes dans la file d'attente MPD
+      CREATE TABLE IF NOT EXISTS queue_youtube_metadata (
+          song_id     INTEGER PRIMARY KEY, -- ID de la chanson dans la file d'attente MPD
           youtube_id  TEXT NOT NULL
+      );
+
+      -- Pour la bibliothèque de vidéos YouTube (remplace youtube_library.json)
+      CREATE TABLE IF NOT EXISTS videos (
+          youtube_id      TEXT PRIMARY KEY NOT NULL,
+          title           TEXT NOT NULL,
+          channel         TEXT NOT NULL,
+          duration_secs   INTEGER NOT NULL
+      );
+
+      -- Pour définir les playlists (remplace la structure racine de yt-playlists.json)
+      CREATE TABLE IF NOT EXISTS playlists (
+          id      INTEGER PRIMARY KEY AUTOINCREMENT,
+          name    TEXT NOT NULL UNIQUE
+      );
+
+      -- Pour lier les vidéos aux playlists (remplace les listes d'IDs dans yt-playlists.json)
+      CREATE TABLE IF NOT EXISTS playlist_items (
+          playlist_id         INTEGER NOT NULL,
+          video_youtube_id    TEXT NOT NULL,
+          position            INTEGER NOT NULL, -- Position dans la playlist
+          PRIMARY KEY (playlist_id, position),
+          FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+          FOREIGN KEY (video_youtube_id) REFERENCES videos(youtube_id) ON DELETE CASCADE
       );
       ```
 
 4.  **Implémenter l'API du `MetadataStore`** :
     -   Créer une `struct MetadataStore` qui contiendra la connexion à la base de données.
-    -   Implémenter les méthodes publiques suivantes :
+    -   Implémenter une API complète pour gérer à la fois la file d'attente et la bibliothèque/playlists.
       ```rust
-      // Ouvre ou crée la base de données
-      pub fn new() -> Result<Self>;
+      // --- Méthodes générales ---
+      pub fn new() -> Result<Self>; // Ouvre ou crée la base de données
 
-      // Associe un ID de chanson MPD à un ID YouTube
-      pub fn add_youtube_song(&self, song_id: u32, youtube_id: &str) -> Result<()>;
+      // --- Métadonnées de la file d'attente ---
+      pub fn add_youtube_song_to_queue(&self, song_id: u32, youtube_id: &str) -> Result<()>;
+      pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>>;
+      pub fn remove_songs_from_queue(&self, song_ids: &[u32]) -> Result<()>;
+      pub fn clear_queue(&self) -> Result<()>;
 
-      // Récupère l'ID YouTube pour un ID de chanson donné
-      pub fn get_youtube_id(&self, song_id: u32) -> Result<Option<String>>;
+      // --- Gestion de la bibliothèque (Vidéos) ---
+      pub fn add_video_to_library(&self, video: &YouTubeVideo) -> Result<()>; // Prend une struct représentant une vidéo
+      pub fn get_all_library_videos(&self) -> Result<Vec<YouTubeVideo>>;
+      // ... autres méthodes CRUD pour les vidéos ...
 
-      // Supprime les métadonnées pour une liste d'IDs de chanson
-      pub fn remove_songs(&self, song_ids: &[u32]) -> Result<()>;
-
-      // Vide complètement la table
-      pub fn clear(&self) -> Result<()>;
+      // --- Gestion des Playlists ---
+      pub fn create_playlist(&self, name: &str) -> Result<()>;
+      pub fn get_all_playlists(&self) -> Result<Vec<Playlist>>; // Playlist contiendrait son nom et ses vidéos
+      pub fn add_video_to_playlist(&self, playlist_name: &str, youtube_id: &str) -> Result<()>;
+      // ... autres méthodes CRUD pour les playlists ...
       ```
 
 ### Étape 3 : Intégration du `MetadataStore` dans l'application
@@ -76,14 +110,17 @@ Cette étape consiste à construire le cœur du nouveau système.
 1.  **Initialisation** :
     -   Instancier le `MetadataStore` au démarrage de l'application (probablement dans `src/core/app.rs`) et le rendre accessible via le contexte global `Ctx`.
 
-2.  **Écriture des métadonnées** :
-    -   Dans `src/ui/mod.rs`, dans la fonction `on_youtube_stream_url_ready`, après avoir obtenu le `song_id` de la part de MPD, appeler `ctx.metadata_store.add_youtube_song(song_id, video.id)`.
+2.  **Remplacement de `youtube::storage`** :
+    -   Modifier toute la logique qui utilise actuellement `youtube::storage` pour lire/écrire dans les fichiers JSON.
+    -   Les panneaux de l'interface utilisateur (comme `youtube_library` et `youtube_playlists`) devront être adaptés pour appeler les nouvelles méthodes du `MetadataStore` via `ctx`.
 
-3.  **Lecture des métadonnées** :
-    -   Dans `src/ui/modals/info_list_modal.rs`, modifier l'implémentation de `From<&Song>` :
-        -   Elle devra accepter le `MetadataStore` en paramètre.
-        -   Appeler `metadata_store.get_youtube_id(song.id)` pour récupérer l'ID YouTube.
-        -   Afficher l'ID s'il est trouvé.
+3.  **Écriture des métadonnées de la file d'attente** :
+    -   Dans `src/ui/mod.rs`, dans la fonction `on_youtube_stream_url_ready`, après avoir obtenu le `song_id` de la part de MPD, appeler `ctx.metadata_store.add_youtube_song_to_queue(song_id, video.id)`.
+
+4.  **Lecture des métadonnées de la file d'attente** :
+    -   Dans `src/ui/modals/info_list_modal.rs`, modifier l'implémentation de `From<&Song>` pour qu'elle puisse accéder au `MetadataStore` (probablement via `Ctx`).
+    -   Appeler `metadata_store.get_youtube_id_for_song(song.id)` pour récupérer l'ID YouTube.
+    -   Afficher l'ID s'il est trouvé.
 
 ### Étape 4 : Synchronisation avec la file d'attente MPD
 
@@ -98,7 +135,7 @@ C'est l'étape la plus critique pour garantir la cohérence des données.
         1.  Récupérer la liste complète des `song_id` de la file d'attente MPD.
         2.  Récupérer la liste complète des `song_id` de la table `youtube_metadata`.
         3.  Calculer la différence : les `song_id` qui sont dans la base de données mais plus dans la file d'attente doivent être supprimés.
-        4.  Appeler `metadata_store.remove_songs(...)` avec les IDs à supprimer.
+        4.  Appeler `metadata_store.remove_songs_from_queue(...)` avec les IDs à supprimer.
     -   Une optimisation sera de gérer les événements de suppression de manière plus ciblée si le protocole le permet facilement.
 
 ### Étape 5 : Implémentation de la logique anti-doublons
@@ -106,15 +143,15 @@ C'est l'étape la plus critique pour garantir la cohérence des données.
 L'objectif est d'empêcher l'ajout de morceaux déjà présents dans la file d'attente, que ce soit des pistes locales ou YouTube.
 
 1.  **Mise à jour du `MetadataStore`** :
-    -   Ajouter une nouvelle méthode pour récupérer tous les IDs YouTube actuellement dans la base de données :
+    -   Ajouter une nouvelle méthode pour récupérer tous les IDs YouTube actuellement dans la file d'attente :
       ```rust
-      // Récupère l'ensemble de tous les IDs YouTube stockés
-      pub fn get_all_youtube_ids(&self) -> Result<HashSet<String>>;
+      // Récupère l'ensemble de tous les IDs YouTube dans la file d'attente
+      pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>>;
       ```
 
 2.  **Logique pour les pistes YouTube** :
     -   La logique d'ajout de vidéos YouTube (par exemple, dans `src/ui/panes/youtube.rs` avant d'envoyer la `WorkRequest`) devra être modifiée :
-        -   Appeler `ctx.metadata_store.get_all_youtube_ids()` pour obtenir les IDs existants.
+        -   Appeler `ctx.metadata_store.get_all_queue_youtube_ids()` pour obtenir les IDs existants.
         -   Vérifier si l'ID de la vidéo à ajouter est déjà dans cet ensemble.
         -   Si c'est le cas, afficher une notification à l'utilisateur (par exemple via `status_warn!`) et annuler l'ajout.
 
