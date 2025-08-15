@@ -449,11 +449,12 @@ impl Pane for RmpcPlaylistsPane {
 
                         let final_modal = modal
                             .list_section(ctx, move |section| {
-                                let p = playlist.clone();
+                                let p_for_rename = playlist.clone();
+                                let p_for_delete = playlist;
                                 Some(
                                     section
                                         .item("Rename playlist", move |ctx| {
-                                            let p_clone = p.clone();
+                                            let p_clone = p_for_rename;
                                             let modal = InputModal::new(ctx)
                                                 .title("Rename playlist")
                                                 .initial_value(p_clone.name.clone())
@@ -472,7 +473,7 @@ impl Pane for RmpcPlaylistsPane {
                                             Ok(())
                                         })
                                         .item("Delete playlist", move |ctx| {
-                                            let p_clone = p.clone();
+                                            let p_clone = p_for_delete;
                                             let modal = menu::modal::MenuModal::new(ctx)
                                                 .list_section(ctx, |section| {
                                                     Some(

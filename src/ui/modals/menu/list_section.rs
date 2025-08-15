@@ -23,7 +23,7 @@ pub struct ListSection {
 pub struct MenuItem {
     pub label: String,
     #[debug(skip)]
-    pub on_confirm: Option<Box<dyn FnOnce(&Ctx) -> Result<()> + Send + Sync + 'static>>,
+    pub on_confirm: Option<Box<dyn FnOnce(&mut Ctx) -> Result<()> + Send + Sync + 'static>>,
 }
 
 impl ListSection {
@@ -39,7 +39,7 @@ impl ListSection {
     pub fn item(
         mut self,
         label: impl Into<String>,
-        on_confirm: impl FnOnce(&Ctx) -> Result<()> + Send + Sync + 'static,
+        on_confirm: impl FnOnce(&mut Ctx) -> Result<()> + Send + Sync + 'static,
     ) -> Self {
         self.items.push(MenuItem { label: label.into(), on_confirm: Some(Box::new(on_confirm)) });
         self
@@ -48,7 +48,7 @@ impl ListSection {
     pub fn add_item(
         &mut self,
         label: impl Into<String>,
-        on_confirm: impl FnOnce(&Ctx) -> Result<()> + Send + Sync + 'static,
+        on_confirm: impl FnOnce(&mut Ctx) -> Result<()> + Send + Sync + 'static,
     ) -> &mut Self {
         self.items.push(MenuItem { label: label.into(), on_confirm: Some(Box::new(on_confirm)) });
         self
@@ -113,7 +113,7 @@ impl Section for ListSection {
         self.selected_idx = None;
     }
 
-    fn confirm(&mut self, ctx: &Ctx) -> Result<bool> {
+    fn confirm(&mut self, ctx: &mut Ctx) -> Result<bool> {
         if let Some(selected_idx) = self.selected_idx {
             if let Some(cb) = self.items[selected_idx].on_confirm.take() {
                 (cb)(ctx)?;
@@ -135,7 +135,7 @@ impl Section for ListSection {
         self.select_item_at_position(position);
     }
 
-    fn double_click(&mut self, _pos: Position, ctx: &Ctx) -> Result<bool> {
+    fn double_click(&mut self, _pos: Position, ctx: &mut Ctx) -> Result<bool> {
         self.confirm(ctx)?;
         Ok(false)
     }

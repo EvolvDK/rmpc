@@ -40,8 +40,8 @@ trait Section {
     fn unselect(&mut self);
     fn unfocus(&mut self) {}
 
-    fn confirm(&mut self, ctx: &Ctx) -> Result<bool>;
-    fn key_input(&mut self, _key: &mut KeyEvent, _ctx: &Ctx) -> Result<()> {
+    fn confirm(&mut self, ctx: &mut Ctx) -> Result<bool>;
+    fn key_input(&mut self, _key: &mut KeyEvent, _ctx: &mut Ctx) -> Result<()> {
         Ok(())
     }
 
@@ -49,7 +49,7 @@ trait Section {
     fn render(&mut self, area: Rect, buf: &mut Buffer);
 
     fn left_click(&mut self, pos: ratatui::layout::Position);
-    fn double_click(&mut self, pos: ratatui::layout::Position, ctx: &Ctx) -> Result<bool>;
+    fn double_click(&mut self, pos: ratatui::layout::Position, ctx: &mut Ctx) -> Result<bool>;
 }
 
 #[derive(Debug)]
@@ -108,7 +108,7 @@ impl Section for SectionType<'_> {
         }
     }
 
-    fn confirm(&mut self, ctx: &Ctx) -> Result<bool> {
+    fn confirm(&mut self, ctx: &mut Ctx) -> Result<bool> {
         match self {
             SectionType::Menu(s) => s.confirm(ctx),
             SectionType::Multi(s) => s.confirm(ctx),
@@ -132,7 +132,7 @@ impl Section for SectionType<'_> {
         }
     }
 
-    fn key_input(&mut self, key: &mut KeyEvent, ctx: &Ctx) -> Result<()> {
+    fn key_input(&mut self, key: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
         match self {
             SectionType::Menu(s) => s.key_input(key, ctx),
             SectionType::Multi(s) => s.key_input(key, ctx),
@@ -148,7 +148,7 @@ impl Section for SectionType<'_> {
         }
     }
 
-    fn double_click(&mut self, pos: Position, ctx: &Ctx) -> Result<bool> {
+    fn double_click(&mut self, pos: Position, ctx: &mut Ctx) -> Result<bool> {
         match self {
             SectionType::Menu(s) => s.double_click(pos, ctx),
             SectionType::Multi(s) => s.double_click(pos, ctx),
