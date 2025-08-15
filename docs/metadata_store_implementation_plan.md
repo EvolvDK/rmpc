@@ -131,6 +131,7 @@ Cette étape consiste à construire le cœur du nouveau système.
 2.  **Remplacement de `youtube::storage`** :
     -   Modifier toute la logique qui utilise actuellement `youtube::storage` pour lire/écrire dans les fichiers JSON.
     -   Les panneaux de l'interface utilisateur (comme `youtube_library` et `youtube_playlists`) devront être adaptés pour appeler les nouvelles méthodes du `DataStore` via `ctx`.
+    -   Mettre à jour la logique des commandes `importlibrary` et `importplaylists` (dans `src/ui/mod.rs`) pour qu'elles insèrent les données lues depuis les fichiers CSV directement dans la base de données SQLite en utilisant le `DataStore`, au lieu d'écrire dans des fichiers JSON.
 
 3.  **Écriture des métadonnées de la file d'attente** :
     -   Dans `src/ui/mod.rs`, dans la fonction `on_youtube_stream_url_ready`, après avoir obtenu le `song_id` de la part de MPD, appeler `ctx.data_store.add_youtube_song_to_queue(song_id, video.id)`.
