@@ -40,6 +40,7 @@ use crate::{
 #[derive(derive_more::Debug)]
 pub struct Ctx {
     pub(crate) config: std::sync::Arc<Config>,
+    #[debug(skip)]
     pub(crate) data_store: DataStore,
     pub(crate) status: Status,
     pub(crate) queue: Vec<Song>,
