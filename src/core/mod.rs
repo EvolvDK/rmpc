@@ -1,6 +1,7 @@
 pub mod client;
 pub mod command;
 pub mod config_watcher;
+pub mod data_store;
 pub mod event_loop;
 pub mod input;
 pub mod scheduler;
