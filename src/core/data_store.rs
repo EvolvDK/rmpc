@@ -1,6 +1,6 @@
 pub mod models;
 
-use std::{collections::HashSet, fs, path::Path};
+use std::{cell::RefCell, collections::HashSet, fs, path::Path};
 
 use rusqlite::Connection;
 use thiserror::Error;
@@ -18,7 +18,7 @@ pub enum DataStoreError {
 }
 
 pub struct DataStore {
-    conn: Connection,
+    conn: RefCell<Connection>,
 }
 
 impl DataStore {
@@ -36,7 +36,9 @@ impl DataStore {
 
         Self::apply_migrations(&mut conn)?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn: RefCell::new(conn),
+        })
     }
 
     /// Opens the database and enables foreign key support.
@@ -113,7 +115,7 @@ impl DataStore {
         song_id: u32,
         youtube_id: &str,
     ) -> Result<(), DataStoreError> {
-        self.conn.execute(
+        self.conn.borrow().execute(
             "INSERT OR REPLACE INTO queue_youtube_metadata (song_id, youtube_id) VALUES (?1, ?2)",
             (song_id, youtube_id),
         )?;
@@ -124,6 +126,7 @@ impl DataStore {
     pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>, DataStoreError> {
         let mut stmt = self
             .conn
+            .borrow()
             .prepare("SELECT youtube_id FROM queue_youtube_metadata WHERE song_id = ?1")?;
         let result = stmt.query_row([song_id], |row| row.get(0));
         match result {
@@ -136,11 +139,11 @@ impl DataStore {
     /// Removes metadata for a list of MPD queue song IDs.
     ///
     /// The operation is performed within a single transaction.
-    pub fn remove_songs_from_queue(&mut self, song_ids: &[u32]) -> Result<(), DataStoreError> {
+    pub fn remove_songs_from_queue(&self, song_ids: &[u32]) -> Result<(), DataStoreError> {
         if song_ids.is_empty() {
             return Ok(());
         }
-        let tx = self.conn.transaction()?;
+        let tx = self.conn.borrow_mut().transaction()?;
         {
             let mut stmt =
                 tx.prepare("DELETE FROM queue_youtube_metadata WHERE song_id = ?1")?;
@@ -154,7 +157,9 @@ impl DataStore {
 
     /// Clears all YouTube metadata from the queue.
     pub fn clear_queue(&self) -> Result<(), DataStoreError> {
-        self.conn.execute("DELETE FROM queue_youtube_metadata", [])?;
+        self.conn
+            .borrow()
+            .execute("DELETE FROM queue_youtube_metadata", [])?;
         Ok(())
     }
 
@@ -162,7 +167,24 @@ impl DataStore {
     ///
     /// This is useful for checking for duplicates before adding a new video.
     pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>, DataStoreError> {
-        let mut stmt = self.conn.prepare("SELECT youtube_id FROM queue_youtube_metadata")?;
+        let mut stmt = self
+            .conn
+            .borrow()
+            .prepare("SELECT youtube_id FROM queue_youtube_metadata")?;
+        let ids = stmt.query_map([], |row| row.get(0))?;
+        let mut result = HashSet::new();
+        for id in ids {
+            result.insert(id?);
+        }
+        Ok(result)
+    }
+
+    /// Returns a set of all MPD song IDs for which metadata is stored.
+    pub fn get_all_queue_song_ids(&self) -> Result<HashSet<u32>, DataStoreError> {
+        let mut stmt = self
+            .conn
+            .borrow()
+            .prepare("SELECT song_id FROM queue_youtube_metadata")?;
         let ids = stmt.query_map([], |row| row.get(0))?;
         let mut result = HashSet::new();
         for id in ids {
@@ -177,7 +199,7 @@ impl DataStore {
     ///
     /// If a video with the same `youtube_id` already exists, it will be replaced.
     pub fn add_video_to_library(&self, video: &models::YouTubeVideo) -> Result<(), DataStoreError> {
-        self.conn.execute(
+        self.conn.borrow().execute(
             "
             INSERT OR REPLACE INTO videos (youtube_id, title, channel, album, duration_secs, thumbnail_url)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -197,13 +219,14 @@ impl DataStore {
     /// Removes a YouTube video from the library.
     pub fn remove_video_from_library(&self, youtube_id: &str) -> Result<(), DataStoreError> {
         self.conn
+            .borrow()
             .execute("DELETE FROM videos WHERE youtube_id = ?1", [youtube_id])?;
         Ok(())
     }
 
     /// Retrieves all YouTube videos from the library.
     pub fn get_all_library_videos(&self) -> Result<Vec<models::YouTubeVideo>, DataStoreError> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.borrow().prepare(
             "
             SELECT youtube_id, title, channel, album, duration_secs, thumbnail_url
             FROM videos
@@ -237,11 +260,9 @@ impl DataStore {
     /// Returns the ID of the newly created playlist.
     /// Fails if the playlist name is already taken.
     pub fn create_playlist(&self, name: &str) -> Result<i64, DataStoreError> {
-        match self
-            .conn
-            .execute("INSERT INTO playlists (name) VALUES (?1)", [name])
-        {
-            Ok(_) => Ok(self.conn.last_insert_rowid()),
+        let conn = self.conn.borrow();
+        match conn.execute("INSERT INTO playlists (name) VALUES (?1)", [name]) {
+            Ok(_) => Ok(conn.last_insert_rowid()),
             Err(rusqlite::Error::SqliteFailure(err, _))
                 if err.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
             {
@@ -254,6 +275,7 @@ impl DataStore {
     /// Deletes a playlist and all its items.
     pub fn delete_playlist(&self, playlist_id: i64) -> Result<(), DataStoreError> {
         self.conn
+            .borrow()
             .execute("DELETE FROM playlists WHERE id = ?1", [playlist_id])?;
         Ok(())
     }
@@ -262,7 +284,7 @@ impl DataStore {
     ///
     /// Fails if the new playlist name is already taken.
     pub fn rename_playlist(&self, playlist_id: i64, new_name: &str) -> Result<(), DataStoreError> {
-        match self.conn.execute(
+        match self.conn.borrow().execute(
             "UPDATE playlists SET name = ?1 WHERE id = ?2",
             (new_name, playlist_id),
         ) {
@@ -280,6 +302,7 @@ impl DataStore {
     pub fn get_all_playlists(&self) -> Result<Vec<models::Playlist>, DataStoreError> {
         let mut stmt = self
             .conn
+            .borrow()
             .prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE")?;
         let playlists_iter =
             stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
@@ -300,7 +323,7 @@ impl DataStore {
         &self,
         playlist_id: i64,
     ) -> Result<Vec<models::PlaylistItem>, DataStoreError> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.borrow().prepare(
             "
             SELECT
                 pi.file_path,
@@ -342,7 +365,7 @@ impl DataStore {
 
     /// Adds a YouTube video to the end of a playlist.
     pub fn add_youtube_video_to_playlist(
-        &mut self,
+        &self,
         playlist_id: i64,
         youtube_id: &str,
     ) -> Result<(), DataStoreError> {
@@ -351,7 +374,7 @@ impl DataStore {
 
     /// Adds a local file to the end of a playlist.
     pub fn add_local_file_to_playlist(
-        &mut self,
+        &self,
         playlist_id: i64,
         file_path: &str,
     ) -> Result<(), DataStoreError> {
@@ -360,12 +383,12 @@ impl DataStore {
 
     /// Adds an item to the end of a playlist.
     fn add_playlist_item(
-        &mut self,
+        &self,
         playlist_id: i64,
         youtube_id: Option<&str>,
         file_path: Option<&str>,
     ) -> Result<(), DataStoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = self.conn.borrow_mut().transaction()?;
 
         let position: i64 = tx.query_row(
             "SELECT COALESCE(MAX(position) + 1, 0) FROM playlist_items WHERE playlist_id = ?1",
@@ -386,11 +409,11 @@ impl DataStore {
     ///
     /// This will shift all subsequent items up.
     pub fn remove_item_from_playlist(
-        &mut self,
+        &self,
         playlist_id: i64,
         position: usize,
     ) -> Result<(), DataStoreError> {
-        let tx = self.conn.transaction()?;
+        let tx = self.conn.borrow_mut().transaction()?;
         let position = position as i64;
 
         let changed = tx.execute(

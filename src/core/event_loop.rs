@@ -427,7 +427,31 @@ fn main_task<B: Backend + std::io::Write>(
                             render_wanted = true;
                         }
                         ("global_queue_update", None, MpdQueryResult::Queue(queue)) => {
-                            ctx.queue = queue.unwrap_or_default();
+                            let new_queue = queue.unwrap_or_default();
+
+                            // Sync DataStore with the new queue state
+                            if let Ok(db_song_ids) = ctx.data_store.get_all_queue_song_ids() {
+                                let new_queue_song_ids: HashSet<u32> =
+                                    new_queue.iter().map(|s| s.id).collect();
+                                let ids_to_remove: Vec<u32> = db_song_ids
+                                    .difference(&new_queue_song_ids)
+                                    .copied()
+                                    .collect();
+
+                                if !ids_to_remove.is_empty() {
+                                    if let Err(e) =
+                                        ctx.data_store.remove_songs_from_queue(&ids_to_remove)
+                                    {
+                                        status_error!("Failed to sync queue with database: {}", e);
+                                    }
+                                }
+                            } else {
+                                status_error!(
+                                    "Failed to read queue song IDs from database for sync."
+                                );
+                            }
+
+                            ctx.queue = new_queue;
                             render_wanted = true;
                         }
                         (
