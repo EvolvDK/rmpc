@@ -38,11 +38,76 @@ pub struct InfoListModal {
 }
 
 #[derive(Debug)]
-struct KeyValues(Vec<KeyValue>);
+pub struct KeyValues(pub Vec<KeyValue>);
 #[derive(Debug)]
-struct KeyValue {
-    key: String,
-    value: String,
+pub struct KeyValue {
+    pub key: String,
+    pub value: String,
+}
+
+impl KeyValues {
+    pub fn from_song(song: &Song, ctx: &Ctx) -> Self {
+        let mut result = Vec::new();
+        result.push(KeyValue {
+            key: "File".to_owned(),
+            value: song.file.clone(),
+        });
+        let file_name = song.file_name().unwrap_or_default();
+        if !file_name.is_empty() {
+            result.push(KeyValue {
+                key: "Filename".to_owned(),
+                value: file_name.into_owned(),
+            });
+        }
+
+        if let Ok(Some(youtube_id)) = ctx.data_store.get_youtube_id_for_song(song.id) {
+            result.push(KeyValue {
+                key: "YouTube ID".to_owned(),
+                value: youtube_id,
+            });
+        }
+
+        if let Some(title) = song.metadata.get("Title") {
+            result.extend(title.iter().map(|item| KeyValue {
+                key: "Title".to_owned(),
+                value: item.to_owned(),
+            }));
+        }
+
+        if let Some(artist) = song.metadata.get("Artist") {
+            result.extend(artist.iter().map(|item| KeyValue {
+                key: "Artist".to_owned(),
+                value: item.to_owned(),
+            }));
+        }
+
+        if let Some(album) = song.metadata.get("Album") {
+            result.extend(album.iter().map(|item| KeyValue {
+                key: "Album".to_owned(),
+                value: item.to_owned(),
+            }));
+        }
+
+        let duration =
+            song.duration.as_ref().map(|d| d.as_secs().to_string()).unwrap_or_default();
+        if !duration.is_empty() {
+            result.push(KeyValue {
+                key: "Duration".to_owned(),
+                value: duration,
+            });
+        }
+
+        result.extend(song.metadata.iter().filter(|(key, _)| {
+            !["Title", "Album", "Artist", "Duration"].contains(&key.as_str())
+        }).flat_map(|(k, v)| {
+            v.iter().map(|item| KeyValue {
+                key: k.to_owned(),
+                value: item.to_owned(),
+            })
+        }));
+
+        KeyValues(result)
+    }
 }
 
 #[bon]
@@ -272,55 +337,3 @@ impl From<Vec<Song>> for KeyValues {
     }
 }
 
-impl From<&Song> for KeyValues {
-    fn from(song: &Song) -> Self {
-        let mut result = Vec::new();
-        result.push(KeyValue { key: "File".to_owned(), value: song.file.clone() });
-        let file_name = song.file_name().unwrap_or_default();
-        if !file_name.is_empty() {
-            result.push(KeyValue { key: "Filename".to_owned(), value: file_name.into_owned() });
-        }
-
-        if let Some(title) = song.metadata.get("Title") {
-            result.extend(
-                title
-                    .iter()
-                    .map(|item| KeyValue { key: "Title".to_owned(), value: item.to_owned() }),
-            );
-        }
-
-        if let Some(artist) = song.metadata.get("Artist") {
-            result.extend(
-                artist
-                    .iter()
-                    .map(|item| KeyValue { key: "Artist".to_owned(), value: item.to_owned() }),
-            );
-        }
-
-        if let Some(album) = song.metadata.get("Album") {
-            result.extend(
-                album
-                    .iter()
-                    .map(|item| KeyValue { key: "Album".to_owned(), value: item.to_owned() }),
-            );
-        }
-
-        let duration = song.duration.as_ref().map(|d| d.as_secs().to_string()).unwrap_or_default();
-        if !duration.is_empty() {
-            result.push(KeyValue { key: "Duration".to_owned(), value: duration });
-        }
-
-        result.extend(
-            song.metadata
-                .iter()
-                .filter(|(key, _)| {
-                    !["Title", "Album", "Artist", "Duration"].contains(&key.as_str())
-                })
-                .flat_map(|(k, v)| {
-                    v.iter().map(|item| KeyValue { key: k.to_owned(), value: item.to_owned() })
-                }),
-        );
-
-        KeyValues(result)
-    }
-}

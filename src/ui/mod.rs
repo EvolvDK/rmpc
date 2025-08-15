@@ -561,10 +561,12 @@ impl<'ui> Ui<'ui> {
                 }
                 GlobalAction::ShowCurrentSongInfo => {
                     if let Some((_, current_song)) = ctx.find_current_song_in_queue() {
+                        let items =
+                            modals::info_list_modal::KeyValues::from_song(current_song, ctx);
                         modal!(
                             ctx,
                             InfoListModal::builder()
-                                .items(current_song)
+                                .items(items)
                                 .title("Song info")
                                 .column_widths(&[30, 70])
                                 .build()
