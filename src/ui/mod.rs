@@ -45,7 +45,7 @@ use crate::{
     mpd::{
         commands::{State, idle::IdleEvent},
         errors::{ErrorCode, MpdError, MpdFailureResponse},
-        mpd_client::{FilterKind, MpdClient, MpdCommand, Tag, ValueChange},
+        mpd_client::{FilterKind, MpdClient, MpdCommand, ValueChange},
         proto_client::ProtoClient,
         version::Version,
         QueuePosition,
