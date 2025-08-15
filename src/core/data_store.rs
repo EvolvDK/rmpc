@@ -1,3 +1,5 @@
+pub mod models;
+
 use std::{collections::HashSet, fs, path::Path};
 
 use rusqlite::Connection;
@@ -132,7 +134,7 @@ impl DataStore {
     /// Removes metadata for a list of MPD queue song IDs.
     ///
     /// The operation is performed within a single transaction.
-    pub fn remove_songs_from_queue(&self, song_ids: &[u32]) -> Result<(), DataStoreError> {
+    pub fn remove_songs_from_queue(&mut self, song_ids: &[u32]) -> Result<(), DataStoreError> {
         if song_ids.is_empty() {
             return Ok(());
         }
@@ -165,5 +167,64 @@ impl DataStore {
             result.insert(id?);
         }
         Ok(result)
+    }
+
+    // --- Library Management ---
+
+    /// Adds a YouTube video to the library.
+    ///
+    /// If a video with the same `youtube_id` already exists, it will be replaced.
+    pub fn add_video_to_library(&self, video: &models::YouTubeVideo) -> Result<(), DataStoreError> {
+        self.conn.execute(
+            "
+            INSERT OR REPLACE INTO videos (youtube_id, title, channel, album, duration_secs, thumbnail_url)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ",
+            (
+                &video.youtube_id,
+                &video.title,
+                &video.channel,
+                &video.album,
+                &video.duration_secs,
+                &video.thumbnail_url,
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// Removes a YouTube video from the library.
+    pub fn remove_video_from_library(&self, youtube_id: &str) -> Result<(), DataStoreError> {
+        self.conn
+            .execute("DELETE FROM videos WHERE youtube_id = ?1", [youtube_id])?;
+        Ok(())
+    }
+
+    /// Retrieves all YouTube videos from the library.
+    pub fn get_all_library_videos(&self) -> Result<Vec<models::YouTubeVideo>, DataStoreError> {
+        let mut stmt = self.conn.prepare(
+            "
+            SELECT youtube_id, title, channel, album, duration_secs, thumbnail_url
+            FROM videos
+            ORDER BY title
+        ",
+        )?;
+
+        let videos_iter = stmt.query_map([], |row| {
+            Ok(models::YouTubeVideo {
+                youtube_id: row.get(0)?,
+                title: row.get(1)?,
+                channel: row.get(2)?,
+                album: row.get(3)?,
+                duration_secs: row.get(4)?,
+                thumbnail_url: row.get(5)?,
+            })
+        })?;
+
+        let mut videos = Vec::new();
+        for video in videos_iter {
+            videos.push(video?);
+        }
+
+        Ok(videos)
     }
 }
