@@ -21,7 +21,7 @@ pub struct MultiActionSection<'a> {
     pub selected_idx: Option<usize>,
     pub current_item_style: Style,
     #[debug(skip)]
-    pub actions: Vec<(&'a str, Option<Box<dyn FnOnce(&Ctx, String) + Send + Sync + 'static>>)>,
+    pub actions: Vec<(&'a str, Option<Box<dyn FnOnce(&mut Ctx, String) + Send + Sync + 'static>>)>,
 }
 
 #[derive(derive_more::Debug)]
@@ -54,7 +54,7 @@ impl<'a> MultiActionSection<'a> {
     pub fn add_action(
         mut self,
         label: &'a str,
-        action: impl FnOnce(&Ctx, String) + Send + Sync + 'static,
+        action: impl FnOnce(&mut Ctx, String) + Send + Sync + 'static,
     ) -> Self {
         self.actions.push((label, Some(Box::new(action))));
         self
@@ -112,7 +112,7 @@ impl Section for MultiActionSection<'_> {
         self.selected_idx = None;
     }
 
-    fn confirm(&mut self, ctx: &Ctx) -> Result<bool> {
+    fn confirm(&mut self, ctx: &mut Ctx) -> Result<bool> {
         if let Some(selected_idx) = self.selected_idx {
             let label = std::mem::take(&mut self.items[selected_idx].label);
             let selected_button = self.items[selected_idx].buttons_state.selected;
@@ -153,7 +153,7 @@ impl Section for MultiActionSection<'_> {
         }
     }
 
-    fn double_click(&mut self, _pos: Position, ctx: &Ctx) -> Result<bool> {
+    fn double_click(&mut self, _pos: Position, ctx: &mut Ctx) -> Result<bool> {
         self.confirm(ctx)?;
         Ok(false)
     }

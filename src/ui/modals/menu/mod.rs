@@ -283,7 +283,7 @@ pub fn playlist_management_actions(
                                 ctx.app_event_sender.send(AppEvent::UiEvent(
                                     UiAppEvent::CreatePlaylistFromItems {
                                         name: name.to_string(),
-                                        items: create_playlist_items,
+                                        items: create_playlist_items.clone(),
                                     },
                                 ))?;
                             }
@@ -347,7 +347,7 @@ pub fn create_playlist_action(
                         ctx.app_event_sender.send(AppEvent::UiEvent(
                             UiAppEvent::CreatePlaylistFromItems {
                                 name: name.to_string(),
-                                items,
+                                items: items.clone(),
                             },
                         ))?;
                     }

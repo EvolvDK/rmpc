@@ -21,7 +21,7 @@ pub struct InputSection<'a> {
     pub is_current: bool,
     pub is_focused: bool,
     #[debug(skip)]
-    pub action: Option<Box<dyn FnOnce(&Ctx, String) + Send + Sync + 'static>>,
+    pub action: Option<Box<dyn FnOnce(&mut Ctx, String) + Send + Sync + 'static>>,
 }
 
 impl<'a> InputSection<'a> {
@@ -37,7 +37,7 @@ impl<'a> InputSection<'a> {
         }
     }
 
-    pub fn action(mut self, action: impl FnOnce(&Ctx, String) + Send + Sync + 'static) -> Self {
+    pub fn action(mut self, action: impl FnOnce(&mut Ctx, String) + Send + Sync + 'static) -> Self {
         self.action = Some(Box::new(action));
         self
     }
@@ -63,7 +63,7 @@ impl Section for InputSection<'_> {
         self.is_current = false;
     }
 
-    fn confirm(&mut self, ctx: &crate::ctx::Ctx) -> Result<bool> {
+    fn confirm(&mut self, ctx: &mut Ctx) -> Result<bool> {
         if self.is_focused {
             if let Some(cb) = self.action.take() {
                 (cb)(ctx, std::mem::take(&mut self.value));
@@ -91,7 +91,7 @@ impl Section for InputSection<'_> {
         self.is_current = true;
     }
 
-    fn double_click(&mut self, pos: Position, _ctx: &Ctx) -> Result<bool> {
+    fn double_click(&mut self, pos: Position, _ctx: &mut Ctx) -> Result<bool> {
         if self.is_focused || !self.area.contains(pos) {
             return Ok(false);
         }
@@ -102,7 +102,7 @@ impl Section for InputSection<'_> {
         Ok(true)
     }
 
-    fn key_input(&mut self, key: &mut KeyEvent, ctx: &Ctx) -> Result<()> {
+    fn key_input(&mut self, key: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
         match key.code() {
             KeyCode::Char(c) => {
                 self.value.push(c);

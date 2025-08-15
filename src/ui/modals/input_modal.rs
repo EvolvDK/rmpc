@@ -200,7 +200,7 @@ impl<'a, C: FnMut(&mut Ctx, &str) -> Result<()> + 'a> Modal for InputModal<'a, C
                 }
                 CommonAction::Confirm => {
                     if self.button_group_state.selected == 0 {
-                        if let Some(callback) = self.callback.take() {
+                        if let Some(mut callback) = self.callback.take() {
                             (callback)(ctx, &self.value)?;
                         }
                     }
