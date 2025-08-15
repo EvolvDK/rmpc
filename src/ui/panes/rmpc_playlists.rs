@@ -130,10 +130,6 @@ impl RmpcPlaylistsPane {
         self.playlist_list_state.selected().and_then(|i| self.playlists.get(i))
     }
 
-    fn get_selected_playlist_name(&self) -> Option<&str> {
-        self.get_selected_playlist().map(|p| p.name.as_str())
-    }
-
     pub fn refresh_playlists(&mut self, ctx: &Ctx) -> Result<()> {
         let prev_selected_id = self.get_selected_playlist().map(|p| p.id);
         self.playlists = ctx.data_store.get_all_playlists()?;

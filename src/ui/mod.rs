@@ -706,6 +706,7 @@ impl<'ui> Ui<'ui> {
         ctx: &mut Ctx,
     ) -> Result<()> {
         if replace {
+            ctx.data_store.clear_queue()?;
             ctx.command(|client| {
                 client.clear()?;
                 Ok(())

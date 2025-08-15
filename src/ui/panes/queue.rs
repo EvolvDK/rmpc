@@ -824,6 +824,7 @@ impl Pane for QueuePane {
                         ConfirmModal::builder().ctx(ctx)
                             .message("Are you sure you want to clear the queue? This action cannot be undone.")
                             .on_confirm(|ctx| {
+                                ctx.data_store.clear_queue()?;
                                 ctx.command(|client| Ok(client.clear()?));
                                 Ok(())
                             })
