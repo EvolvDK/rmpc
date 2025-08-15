@@ -673,6 +673,7 @@ impl<'ui> Ui<'ui> {
     }
 
     pub fn on_youtube_video_info_fetched(&mut self, video: YouTubeVideo, ctx: &mut Ctx) -> Result<()> {
+        ctx.data_store.add_video_to_library(&video)?;
         self.sync_videos_to_playlists_pane(&[video.clone()], ctx)?;
 
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
@@ -680,23 +681,22 @@ impl<'ui> Ui<'ui> {
             if self.pending_youtube_imports > 0 {
                 self.pending_youtube_imports -= 1;
                 if self.pending_youtube_imports == 0 {
-                    crate::youtube::storage::save_library(&p.videos_by_channel)?;
                     status_info!("YouTube library import complete.");
                 }
-            } else {
-                crate::youtube::storage::save_library(&p.videos_by_channel)?;
             }
         }
         Ok(ctx.render()?)
     }
 
     pub fn on_youtube_library_remove_video(&mut self, video_id: &str, ctx: &mut Ctx) -> Result<()> {
+        ctx.data_store.remove_video_from_library(video_id)?;
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
             p.remove_video(video_id);
         }
         if let Panes::RmpcPlaylists(p) = self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
             p.remove_video(video_id);
         }
+        status_info!("Removed video from library.");
         Ok(ctx.render()?)
     }
 
@@ -1007,7 +1007,7 @@ impl<'ui> Ui<'ui> {
             }
             UiAppEvent::RefreshRmpcPlaylists => {
                 if let Panes::RmpcPlaylists(p) = self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
-                    p.refresh_playlists()?;
+                    p.refresh_playlists(ctx)?;
                 }
                 ctx.render()?;
             }
@@ -1088,13 +1088,7 @@ impl<'ui> Ui<'ui> {
 
     pub fn on_event(&mut self, mut event: UiEvent, ctx: &mut Ctx) -> Result<()> {
         match event {
-            UiEvent::Exit => {
-                if let Ok(Panes::YouTube(p)) = self.panes.get_mut(&PaneType::YouTube, ctx) {
-                    if let Err(e) = crate::youtube::storage::save_library(&p.videos_by_channel) {
-                        log::error!(error:? = e; "Failed to save YouTube library");
-                    }
-                }
-            }
+            UiEvent::Exit => {}
             UiEvent::Database => {
                 status_warn!(
                     "The music database has been updated. Some parts of the UI may have been reinitialized to prevent inconsistent behaviours."
@@ -1230,8 +1224,10 @@ impl<'ui> Ui<'ui> {
                 }
                 (
                     "add_youtube_song" | "refresh_youtube_song",
-                    MpdQueryResult::YouTubeSongAdded { song_id: _, video },
+                    MpdQueryResult::YouTubeSongAdded { song_id, video },
                 ) => {
+                    ctx.data_store
+                        .add_youtube_song_to_queue(song_id, &video.youtube_id)?;
                     if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
                         p.add_video(video.clone());
                     }

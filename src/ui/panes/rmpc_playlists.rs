@@ -347,7 +347,7 @@ impl Pane for RmpcPlaylistsPane {
                             .title("Create new playlist")
                             .on_confirm(|ctx, name| {
                                 if !name.is_empty() {
-                                    match storage::save_playlist(name, &[]) {
+                                    match ctx.data_store.create_playlist(name) {
                                         Ok(_) => {
                                             ctx.app_event_sender
                                                 .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
