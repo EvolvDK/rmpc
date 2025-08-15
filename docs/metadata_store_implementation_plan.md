@@ -35,7 +35,7 @@ Avant d'écrire du nouveau code, il est crucial de supprimer l'ancien.
 2.  **Supprimer la logique du tag "Comment"** :
     -   Dans `src/ui/modals/info_list_modal.rs` : S'assurer que toute logique de lecture du tag `Comment` pour l'ID YouTube est supprimée et que le filtre de tags est propre.
 
-### Étape 2 : Création du module `MetadataStore`
+### Étape 2 : Création du module `DataStore`
 
 Cette étape consiste à construire le cœur du nouveau système.
 
@@ -43,7 +43,7 @@ Cette étape consiste à construire le cœur du nouveau système.
     -   Ajouter `rusqlite` au `Cargo.toml` pour l'interaction avec la base de données SQLite.
 
 2.  **Créer le nouveau module** :
-    -   Créer un nouveau fichier : `src/core/metadata_store.rs`.
+    -   Créer un nouveau fichier : `src/core/data_store.rs`.
 
 3.  **Définir la structure de la base de données** :
     -   Le module initialisera une base de données SQLite unique (par ex. `~/.config/rmpc/rmpc.db`).
@@ -86,8 +86,8 @@ Cette étape consiste à construire le cœur du nouveau système.
       );
       ```
 
-4.  **Implémenter l'API du `MetadataStore`** :
-    -   Créer une `struct MetadataStore` qui contiendra la connexion à la base de données.
+4.  **Implémenter l'API du `DataStore`** :
+    -   Créer une `struct DataStore` qui contiendra la connexion à la base de données.
     -   Implémenter une API complète pour gérer à la fois la file d'attente et la bibliothèque/playlists.
       ```rust
       // --- Méthodes générales ---
@@ -118,21 +118,21 @@ Cette étape consiste à construire le cœur du nouveau système.
       // ... autres méthodes de manipulation de playlist ...
       ```
 
-### Étape 3 : Intégration du `MetadataStore` dans l'application
+### Étape 3 : Intégration du `DataStore` dans l'application
 
 1.  **Initialisation** :
-    -   Instancier le `MetadataStore` au démarrage de l'application (probablement dans `src/core/app.rs`) et le rendre accessible via le contexte global `Ctx`.
+    -   Instancier le `DataStore` au démarrage de l'application (probablement dans `src/core/app.rs`) et le rendre accessible via le contexte global `Ctx`.
 
 2.  **Remplacement de `youtube::storage`** :
     -   Modifier toute la logique qui utilise actuellement `youtube::storage` pour lire/écrire dans les fichiers JSON.
-    -   Les panneaux de l'interface utilisateur (comme `youtube_library` et `youtube_playlists`) devront être adaptés pour appeler les nouvelles méthodes du `MetadataStore` via `ctx`.
+    -   Les panneaux de l'interface utilisateur (comme `youtube_library` et `youtube_playlists`) devront être adaptés pour appeler les nouvelles méthodes du `DataStore` via `ctx`.
 
 3.  **Écriture des métadonnées de la file d'attente** :
-    -   Dans `src/ui/mod.rs`, dans la fonction `on_youtube_stream_url_ready`, après avoir obtenu le `song_id` de la part de MPD, appeler `ctx.metadata_store.add_youtube_song_to_queue(song_id, video.id)`.
+    -   Dans `src/ui/mod.rs`, dans la fonction `on_youtube_stream_url_ready`, après avoir obtenu le `song_id` de la part de MPD, appeler `ctx.data_store.add_youtube_song_to_queue(song_id, video.id)`.
 
 4.  **Lecture des métadonnées de la file d'attente** :
-    -   Dans `src/ui/modals/info_list_modal.rs`, modifier l'implémentation de `From<&Song>` pour qu'elle puisse accéder au `MetadataStore` (probablement via `Ctx`).
-    -   Appeler `metadata_store.get_youtube_id_for_song(song.id)` pour récupérer l'ID YouTube.
+    -   Dans `src/ui/modals/info_list_modal.rs`, modifier l'implémentation de `From<&Song>` pour qu'elle puisse accéder au `DataStore` (probablement via `Ctx`).
+    -   Appeler `data_store.get_youtube_id_for_song(song.id)` pour récupérer l'ID YouTube.
     -   Afficher l'ID s'il est trouvé.
 
 ### Étape 4 : Synchronisation avec la file d'attente MPD
@@ -148,14 +148,14 @@ C'est l'étape la plus critique pour garantir la cohérence des données.
         1.  Récupérer la liste complète des `song_id` de la file d'attente MPD.
         2.  Récupérer la liste complète des `song_id` de la table `youtube_metadata`.
         3.  Calculer la différence : les `song_id` qui sont dans la base de données mais plus dans la file d'attente doivent être supprimés.
-        4.  Appeler `metadata_store.remove_songs_from_queue(...)` avec les IDs à supprimer.
+        4.  Appeler `data_store.remove_songs_from_queue(...)` avec les IDs à supprimer.
     -   Une optimisation sera de gérer les événements de suppression de manière plus ciblée si le protocole le permet facilement.
 
 ### Étape 5 : Implémentation de la logique anti-doublons
 
 L'objectif est d'empêcher l'ajout de morceaux déjà présents dans la file d'attente, que ce soit des pistes locales ou YouTube.
 
-1.  **Mise à jour du `MetadataStore`** :
+1.  **Mise à jour du `DataStore`** :
     -   Ajouter une nouvelle méthode pour récupérer tous les IDs YouTube actuellement dans la file d'attente :
       ```rust
       // Récupère l'ensemble de tous les IDs YouTube dans la file d'attente
@@ -164,7 +164,7 @@ L'objectif est d'empêcher l'ajout de morceaux déjà présents dans la file d'a
 
 2.  **Logique pour les pistes YouTube** :
     -   La logique d'ajout de vidéos YouTube (par exemple, dans `src/ui/panes/youtube.rs` avant d'envoyer la `WorkRequest`) devra être modifiée :
-        -   Appeler `ctx.metadata_store.get_all_queue_youtube_ids()` pour obtenir les IDs existants.
+        -   Appeler `ctx.data_store.get_all_queue_youtube_ids()` pour obtenir les IDs existants.
         -   Vérifier si l'ID de la vidéo à ajouter est déjà dans cet ensemble.
         -   Si c'est le cas, afficher une notification à l'utilisateur (par exemple via `status_warn!`) et annuler l'ajout.
 
