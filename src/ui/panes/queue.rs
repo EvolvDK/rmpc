@@ -14,6 +14,7 @@ use ratatui::{
 
 use super::{CommonAction, Pane};
 use crate::{
+    core::data_store::models::PlaylistItem,
     MpdQueryResult,
     config::{
         keys::{
@@ -197,8 +198,8 @@ impl QueuePane {
             })
             .list_section(ctx, |mut section| {
                 section.add_item("Add queue to playlist", |ctx| {
-                    let playlists = match crate::youtube::storage::list_playlists() {
-                        Ok(p) => p,
+                    let playlists = match ctx.data_store.get_all_playlists() {
+                        Ok(p) => p.into_iter().map(|p| p.name).collect::<Vec<_>>(),
                         Err(e) => {
                             status_error!("Failed to list rmpc playlists: {}", e);
                             return Ok(());
@@ -209,15 +210,8 @@ impl QueuePane {
                         return Ok(());
                     }
 
-                    let items_to_add: Vec<crate::youtube::storage::PlaylistItem> = ctx
-                        .queue
-                        .iter()
-                        .map(|song| {
-                            crate::youtube::storage::PlaylistItem::Local {
-                                path: song.file.clone(),
-                            }
-                        })
-                        .collect();
+                    let items_to_add: Vec<PlaylistItem> =
+                        ctx.queue.iter().map(|song| PlaylistItem::Local(song.file.clone())).collect();
 
                     if items_to_add.is_empty() {
                         status_info!("Queue is empty, nothing to add.");
@@ -254,34 +248,21 @@ impl QueuePane {
                                 if name.is_empty() {
                                     return Ok(());
                                 }
-                                let items: Vec<crate::youtube::storage::PlaylistItem> = ctx
+                                let items: Vec<PlaylistItem> = ctx
                                     .queue
                                     .iter()
-                                    .map(|song| {
-                                        crate::youtube::storage::PlaylistItem::Local {
-                                            path: song.file.clone(),
-                                        }
-                                    })
+                                    .map(|song| PlaylistItem::Local(song.file.clone()))
                                     .collect();
 
                                 if items.is_empty() {
                                     status_info!("Queue is empty, nothing to save.");
                                 } else {
-                                    match crate::youtube::storage::save_playlist(name, &items) {
-                                        Ok(()) => {
-                                            status_info!(
-                                                "Saved {} items to playlist '{}'",
-                                                items.len(),
-                                                name
-                                            );
-                                            ctx.app_event_sender.send(AppEvent::UiEvent(
-                                                UiAppEvent::RefreshRmpcPlaylists,
-                                            ))?;
-                                        }
-                                        Err(e) => {
-                                            status_error!("Failed to save playlist '{}': {}", name, e)
-                                        }
-                                    }
+                                    ctx.app_event_sender.send(AppEvent::UiEvent(
+                                        UiAppEvent::CreatePlaylistFromItems {
+                                            name: name.to_string(),
+                                            items,
+                                        },
+                                    ))?;
                                 }
                                 Ok(())
                             })
@@ -693,10 +674,12 @@ impl Pane for QueuePane {
     ) -> Result<()> {
         match (id, data) {
             (GET_SONG_INFO, MpdQueryResult::SongInfo(Some(song))) => {
+                let items =
+                    crate::ui::modals::info_list_modal::KeyValues::from_song(&song, ctx);
                 modal!(
                     ctx,
                     InfoListModal::builder()
-                        .items(&song)
+                        .items(items)
                         .title("Song info")
                         .column_widths(&[30, 70])
                         .build()

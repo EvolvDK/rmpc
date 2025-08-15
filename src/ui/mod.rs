@@ -19,7 +19,7 @@ use ratatui::{
     style::{Color, Style, Stylize},
     symbols::border,
     text::{Line, Span},
-    widgets::{Block, Borders},
+    widgets::{Block, Borders, ListItem},
 };
 use tab_screen::TabScreen;
 
@@ -29,11 +29,10 @@ use self::{
 };
 use crate::{
     core::data_store::models::{PlaylistItem, YouTubeVideo},
-    shared::mpd_query::{ListItem, PreviewGroup},
+    shared::mpd_query::PreviewGroup,
     ui::panes::ToPreview,
     MpdQueryResult,
     shared::events::AppEvent,
-    youtube,
     config::{
         Config,
         cli::Args,
