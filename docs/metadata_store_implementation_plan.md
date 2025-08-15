@@ -8,7 +8,7 @@ Ce document décrit les étapes nécessaires pour implémenter un système de pe
 Créer un système de stockage unique, robuste et performant basé sur SQLite pour toutes les données persistantes de l'application, incluant :
 1.  Les métadonnées des pistes YouTube dans la file d'attente MPD (ID YouTube).
 2.  La bibliothèque de vidéos YouTube (`youtube_library.json`).
-3.  Les playlists YouTube de l'utilisateur (`yt-playlists.json`).
+3.  Les playlists YouTube de l'utilisateur (stockées dans le répertoire `yt-playlists/`).
 
 ### Objectifs secondaires
 - **Consolidation** : Unifier la gestion des données dans un seul module pour améliorer la cohérence et la maintenabilité.
@@ -56,27 +56,33 @@ Cette étape consiste à construire le cœur du nouveau système.
       );
 
       -- Pour la bibliothèque de vidéos YouTube (remplace youtube_library.json)
+      -- Ne stocke que les métadonnées permanentes.
       CREATE TABLE IF NOT EXISTS videos (
           youtube_id      TEXT PRIMARY KEY NOT NULL,
           title           TEXT NOT NULL,
           channel         TEXT NOT NULL,
-          duration_secs   INTEGER NOT NULL
+          album           TEXT, -- L'album peut être optionnel
+          duration_secs   INTEGER NOT NULL,
+          thumbnail_url   TEXT -- L'URL de la miniature peut être stockée si elle est stable
       );
 
-      -- Pour définir les playlists (remplace la structure racine de yt-playlists.json)
+      -- Pour définir les playlists (remplace la structure de dossiers yt-playlists/)
+      -- Conçue pour contenir à la fois des pistes locales et YouTube.
       CREATE TABLE IF NOT EXISTS playlists (
           id      INTEGER PRIMARY KEY AUTOINCREMENT,
           name    TEXT NOT NULL UNIQUE
       );
 
-      -- Pour lier les vidéos aux playlists (remplace les listes d'IDs dans yt-playlists.json)
+      -- Pour lier les pistes (locales ou YouTube) aux playlists
       CREATE TABLE IF NOT EXISTS playlist_items (
           playlist_id         INTEGER NOT NULL,
-          video_youtube_id    TEXT NOT NULL,
           position            INTEGER NOT NULL, -- Position dans la playlist
+          video_youtube_id    TEXT, -- Pour les pistes YouTube, NULL pour les locales
+          file_path           TEXT, -- Pour les pistes locales, NULL pour les YouTube
           PRIMARY KEY (playlist_id, position),
           FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-          FOREIGN KEY (video_youtube_id) REFERENCES videos(youtube_id) ON DELETE CASCADE
+          FOREIGN KEY (video_youtube_id) REFERENCES videos(youtube_id) ON DELETE CASCADE,
+          CHECK (video_youtube_id IS NOT NULL OR file_path IS NOT NULL) -- S'assure qu'au moins un type de piste est défini
       );
       ```
 
@@ -94,15 +100,22 @@ Cette étape consiste à construire le cœur du nouveau système.
       pub fn clear_queue(&self) -> Result<()>;
 
       // --- Gestion de la bibliothèque (Vidéos) ---
-      pub fn add_video_to_library(&self, video: &YouTubeVideo) -> Result<()>; // Prend une struct représentant une vidéo
+      pub fn add_video_to_library(&self, video: &YouTubeVideo) -> Result<()>;
+      pub fn remove_video_from_library(&self, youtube_id: &str) -> Result<()>;
       pub fn get_all_library_videos(&self) -> Result<Vec<YouTubeVideo>>;
-      // ... autres méthodes CRUD pour les vidéos ...
+      // ... autres méthodes CRUD pour les vidéos si nécessaire ...
 
       // --- Gestion des Playlists ---
       pub fn create_playlist(&self, name: &str) -> Result<()>;
-      pub fn get_all_playlists(&self) -> Result<Vec<Playlist>>; // Playlist contiendrait son nom et ses vidéos
-      pub fn add_video_to_playlist(&self, playlist_name: &str, youtube_id: &str) -> Result<()>;
-      // ... autres méthodes CRUD pour les playlists ...
+      pub fn delete_playlist(&self, playlist_name: &str) -> Result<()>;
+      pub fn rename_playlist(&self, old_name: &str, new_name: &str) -> Result<()>;
+      pub fn get_all_playlists(&self) -> Result<Vec<Playlist>>; // Playlist contiendrait son nom et ses pistes (locales et YouTube)
+
+      // --- Gestion du contenu des Playlists ---
+      pub fn add_youtube_video_to_playlist(&self, playlist_name: &str, youtube_id: &str) -> Result<()>;
+      pub fn add_local_file_to_playlist(&self, playlist_name: &str, file_path: &str) -> Result<()>;
+      pub fn remove_item_from_playlist(&self, playlist_name: &str, position: usize) -> Result<()>;
+      // ... autres méthodes de manipulation de playlist ...
       ```
 
 ### Étape 3 : Intégration du `MetadataStore` dans l'application
