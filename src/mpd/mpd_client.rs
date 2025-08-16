@@ -194,6 +194,16 @@ pub trait MpdCommand {
     fn send_list_partitions(&mut self) -> MpdResult<()>;
     fn send_move_output(&mut self, output_name: &str) -> MpdResult<()>;
     fn send_send_message(&mut self, channel: &str, content: &str) -> MpdResult<()>;
+    fn send_string_normalization_enable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()>;
+    fn send_string_normalization_disable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()>;
+    fn send_string_normalization_all(&mut self) -> MpdResult<()>;
+    fn send_string_normalization_clear(&mut self) -> MpdResult<()>;
 }
 
 #[allow(dead_code)]
@@ -242,9 +252,9 @@ pub trait MpdClient: Sized {
     fn delete_id(&mut self, id: u32) -> MpdResult<()>;
     fn delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()>;
     fn playlist_id(&mut self, song_id: u32) -> MpdResult<Option<Song>>;
-    fn playlist_info(&mut self) -> MpdResult<Option<Vec<Song>>>;
+    fn playlist_info(&mut self, fetch_stickers: bool) -> MpdResult<Option<Vec<Song>>>;
     fn find(&mut self, filter: &[Filter<'_>]) -> MpdResult<Vec<Song>>;
-    fn search(&mut self, filter: &[Filter<'_>]) -> MpdResult<Vec<Song>>;
+    fn search(&mut self, filter: &[Filter<'_>], ignore_diacritics: bool) -> MpdResult<Vec<Song>>;
     fn move_in_queue(&mut self, from: SingleOrRange, to: QueuePosition) -> MpdResult<()>;
     fn move_id(&mut self, id: u32, to: QueuePosition) -> MpdResult<()>;
     fn find_one(&mut self, filter: &[Filter<'_>]) -> MpdResult<Option<Song>>;
@@ -331,6 +341,17 @@ pub trait MpdClient: Sized {
     fn move_output(&mut self, output_name: &str) -> MpdResult<()>;
     // Client to client
     fn send_message(&mut self, channel: &str, content: &str) -> MpdResult<()>;
+    
+    fn string_normalization_enable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()>;
+    fn string_normalization_disable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()>;
+    fn string_normalization_all(&mut self) -> MpdResult<()>;
+    fn string_normalization_clear(&mut self) -> MpdResult<()>;
 }
 
 impl MpdClient for Client<'_> {
@@ -506,8 +527,38 @@ impl MpdClient for Client<'_> {
         self.send_playlist_id(song_id).and_then(|()| self.read_opt_response())
     }
 
-    fn playlist_info(&mut self) -> MpdResult<Option<Vec<Song>>> {
-        self.send_playlist_info().and_then(|()| self.read_opt_response())
+    fn playlist_info(&mut self, fetch_stickers: bool) -> MpdResult<Option<Vec<Song>>> {
+        let songs: Option<Vec<Song>> =
+            self.send_playlist_info().and_then(|()| self.read_opt_response())?;
+
+        if !fetch_stickers {
+            return Ok(songs);
+        }
+
+        let Some(mut songs) = songs else {
+            return Ok(songs);
+        };
+
+        let mut stickers = match self
+            .list_stickers_multiple(&songs.iter().map(|song| song.file.as_str()).collect_vec())
+        {
+            Ok(stickers) => stickers,
+            Err(err) => {
+                log::error!(err:?; "Failed to fetch stickers for playlist_info");
+                return Ok(Some(songs));
+            }
+        };
+
+        if songs.len() != stickers.len() {
+            log::error!(songs_len = songs.len(), stickers_len = stickers.len(); "Received different number of sticker responses than requested songs");
+            return Ok(Some(songs));
+        }
+
+        for (stickers, song) in stickers.iter_mut().zip(songs.iter_mut()) {
+            song.stickers = Some(std::mem::take(&mut stickers.0));
+        }
+
+        Ok(Some(songs))
     }
 
     /// Search the database for songs matching FILTER
@@ -518,8 +569,17 @@ impl MpdClient for Client<'_> {
     /// Search the database for songs matching FILTER (see Filters).
     /// Parameters have the same meaning as for find, except that search is not
     /// case sensitive.
-    fn search(&mut self, filter: &[Filter<'_>]) -> MpdResult<Vec<Song>> {
-        self.send_search(filter).and_then(|()| self.read_response())
+    fn search(&mut self, filter: &[Filter<'_>], ignore_diacritics: bool) -> MpdResult<Vec<Song>> {
+        if ignore_diacritics {
+            self.send_start_cmd_list()?;
+            self.send_string_normalization_enable(&[StringNormalizationFeature::StripDiacritics])?;
+            self.send_search(filter)?;
+            self.send_string_normalization_disable(&[StringNormalizationFeature::StripDiacritics])?;
+            self.send_execute_cmd_list()?;
+            self.read_response()
+        } else {
+            self.send_search(filter).and_then(|()| self.read_response())
+        }
     }
 
     fn move_in_queue(&mut self, from: SingleOrRange, to: QueuePosition) -> MpdResult<()> {
@@ -838,6 +898,28 @@ impl MpdClient for Client<'_> {
 
     fn send_message(&mut self, channel: &str, content: &str) -> MpdResult<()> {
         self.send_send_message(channel, content).and_then(|()| self.read_ok())
+    }
+    
+    fn string_normalization_enable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()> {
+        self.send_string_normalization_enable(features).and_then(|()| self.read_ok())
+    }
+
+    fn string_normalization_disable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()> {
+        self.send_string_normalization_disable(features).and_then(|()| self.read_ok())
+    }
+
+    fn string_normalization_all(&mut self) -> MpdResult<()> {
+        self.send_string_normalization_all().and_then(|()| self.read_ok())
+    }
+
+    fn string_normalization_clear(&mut self) -> MpdResult<()> {
+        self.send_string_normalization_clear().and_then(|()| self.read_ok())
     }
 }
 
@@ -1323,6 +1405,48 @@ impl<T: SocketClient> MpdCommand for T {
             content.quote_and_escape(),
         ))
     }
+
+    fn send_string_normalization_enable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()> {
+        debug_assert!(!features.is_empty());
+
+        let mut buf = String::from("stringnormalization enable");
+        for feature in features {
+            buf.push(' ');
+            buf.push_str(feature.as_ref());
+        }
+        self.execute(&buf)
+    }
+
+    fn send_string_normalization_disable(
+        &mut self,
+        features: &[StringNormalizationFeature],
+    ) -> MpdResult<()> {
+        debug_assert!(!features.is_empty());
+
+        let mut buf = String::from("stringnormalization disable");
+        for feature in features {
+            buf.push(' ');
+            buf.push_str(feature.as_ref());
+        }
+        self.execute(&buf)
+    }
+
+    fn send_string_normalization_all(&mut self) -> MpdResult<()> {
+        self.execute("stringnormalization all")
+    }
+
+    fn send_string_normalization_clear(&mut self) -> MpdResult<()> {
+        self.execute("stringnormalization clear")
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy, strum::Display, strum::AsRefStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum StringNormalizationFeature {
+    StripDiacritics,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

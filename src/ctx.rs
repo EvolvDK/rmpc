@@ -26,6 +26,7 @@ use crate::{
         client::Client,
         commands::{Song, State, Status},
         mpd_client::MpdClient,
+        version::Version,
     },
     shared::{
         events::ClientRequest,
@@ -39,6 +40,7 @@ use crate::{
 
 #[derive(derive_more::Debug)]
 pub struct Ctx {
+    pub(crate) mpd_version: Version,
     pub(crate) config: std::sync::Arc<Config>,
     #[debug(skip)]
     pub(crate) data_store: DataStore,
@@ -99,6 +101,7 @@ impl Ctx {
         let active_tab = config.tabs.names.first().context("Expected at least one tab")?.clone();
         scheduler.start();
         Ok(Self {
+            mpd_version: client.version(),
             lrc_index: LrcIndex::default(),
             config: std::sync::Arc::new(config),
             data_store,
