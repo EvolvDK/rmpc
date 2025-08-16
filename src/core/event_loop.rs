@@ -241,13 +241,13 @@ fn main_task<B: Backend + std::io::Write>(
                     render_wanted = true;
                 }
                 AppEvent::WorkDone(Ok(result)) => match result {
-                    WorkDone::YouTubeSearchResult(video) => {
-                        if let Err(err) = ui.on_youtube_search_result(video, &mut ctx) {
+                    WorkDone::YouTubeSearchResult { video, generation } => {
+                        if let Err(err) = ui.on_youtube_search_result(video, generation, &mut ctx) {
                             log::error!(error:? = err; "UI failed to handle youtube search result event");
                         }
                     }
-                    WorkDone::YouTubeSearchFinished => {
-                        if let Err(err) = ui.on_youtube_search_complete(&mut ctx) {
+                    WorkDone::YouTubeSearchFinished { generation } => {
+                        if let Err(err) = ui.on_youtube_search_complete(generation, &mut ctx) {
                             log::error!(error:? = err; "UI failed to handle youtube search complete event");
                         }
                     }
