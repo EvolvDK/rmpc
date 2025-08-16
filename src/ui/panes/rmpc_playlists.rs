@@ -23,7 +23,7 @@ use crate::{
     },
     ui::{
         modals::{input_modal::InputModal, menu},
-        panes::{render_preview_data, Pane, ToPreview},
+        panes::{render_preview_data, Pane},
         UiAppEvent,
     },
     MpdQueryResult,

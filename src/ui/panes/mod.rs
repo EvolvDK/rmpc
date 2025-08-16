@@ -20,7 +20,6 @@ use queue::QueuePane;
 use ratatui::{
     layout::Layout,
     prelude::Rect,
-    style::Style,
     text::{Line, Span},
     widgets::{Block, List, ListItem},
     Frame,
