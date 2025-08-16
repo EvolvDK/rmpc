@@ -502,12 +502,15 @@ fn main_task<B: Backend + std::io::Write>(
                                 {
                                     if let Some(song) = ctx.queue.get(pos as usize) {
                                         let video_title = song.title_str("").to_string();
-                                        try_skip!(ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
-                                            old_song_id: song_id,
-                                            position: pos,
-                                            youtube_id,
-                                            video_title,
-                                        }));
+                                        try_skip!(
+                                            ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
+                                                old_song_id: song_id,
+                                                position: pos,
+                                                youtube_id,
+                                                video_title,
+                                            }),
+                                            "Failed to send YouTube stream refresh request"
+                                        );
                                     }
                                 }
                             }
