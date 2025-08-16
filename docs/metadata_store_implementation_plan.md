@@ -61,7 +61,8 @@ Les URLs de streaming YouTube expirent, ce qui provoque des échecs de lecture s
     2.  Ce processus doit être **asynchrone** (via une `WorkRequest`) pour ne pas bloquer l'interface utilisateur.
     3.  **Si le rafraîchissement réussit** :
         -   Récupérer l'ID YouTube permanent de la piste depuis le `DataStore`.
-        -   Demander une nouvelle URL de streaming.
+        -   Demander une nouvelle URL de streaming **et les métadonnées à jour** de la vidéo (via `yt-dlp`).
+        -   Comparer les métadonnées obtenues avec celles stockées dans la table `videos` et les mettre à jour si elles ont changé.
         -   Remplacer l'ancienne chanson dans la file d'attente MPD par une nouvelle avec la nouvelle URL, en utilisant `deleteid` et `addid` pour préserver **exactement la même position**.
         -   Relancer la lecture.
     4.  **Si le rafraîchissement échoue** (par exemple, vidéo supprimée, problème réseau) :
