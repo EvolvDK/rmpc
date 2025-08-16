@@ -18,7 +18,7 @@ use crate::{
         mpd_client::{MpdClient, SaveMode},
     },
     shared::{
-        events::{AppEvent, WorkDone},
+        events::{AppEvent, WorkDone, WorkRequest},
         ext::error::ErrorExt,
         id::{self, Id},
         macros::{status_error, status_warn, try_skip},
