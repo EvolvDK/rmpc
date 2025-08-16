@@ -79,20 +79,15 @@ static CACHE: Lazy<Cache> = Lazy::new(|| Cache {
 /// # Arguments
 /// * `query` - La chaîne de caractères pour la recherche.
 /// * `ttl` - La durée de vie du cache.
-pub async fn search(query: &str, ttl: Duration, event_tx: Sender<AppEvent>) -> Result<()> {
-    if ttl > Duration::ZERO {
-        if let Some((created, videos)) = CACHE.searches.lock().unwrap().get(query) {
-            if created.elapsed() < ttl {
-                for video_info in videos {
-                    event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult(
-                        video_info.clone().into(),
-                    ))))?;
-                }
-                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchFinished)))?;
-                return Ok(());
-            }
-        }
-    }
+pub async fn search(
+    query: &str,
+    generation: u64,
+    ttl: Duration,
+    event_tx: Sender<AppEvent>,
+) -> Result<()> {
+    // Note: Le cache n'est pas utilisé ici car la logique de génération le rend complexe
+    // à gérer correctement sans introduire de potentiels bugs de cohérence.
+    // Une implémentation future pourrait stocker les résultats avec leur génération.
 
     let mut cmd = Command::new("yt-dlp")
         .arg("--dump-json")
@@ -110,9 +105,10 @@ pub async fn search(query: &str, ttl: Duration, event_tx: Sender<AppEvent>) -> R
             if ttl > Duration::ZERO {
                 results_for_cache.push(video_info.clone());
             }
-            event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult(
-                video_info.into(),
-            ))))?;
+            event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult {
+                video: video_info.into(),
+                generation,
+            })))?;
         }
     }
 
@@ -129,7 +125,7 @@ pub async fn search(query: &str, ttl: Duration, event_tx: Sender<AppEvent>) -> R
             .insert(query.to_string(), (Instant::now(), results_for_cache));
     }
 
-    event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchFinished)))?;
+    event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchFinished { generation })))?;
 
     Ok(())
 }

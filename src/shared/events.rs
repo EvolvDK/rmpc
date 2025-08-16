@@ -51,6 +51,7 @@ pub(crate) enum WorkRequest {
     Command(Command),
     YouTubeSearch {
         query: String,
+        generation: u64,
     },
     GetYouTubeStreamUrl {
         video: YouTubeVideo,
@@ -72,8 +73,13 @@ pub(crate) enum WorkRequest {
 pub(crate) enum WorkDone {
     LyricsIndexed { index: LrcIndex },
     SingleLrcIndexed { lrc_entry: Option<LrcIndexEntry> },
-    YouTubeSearchResult(YouTubeVideo),
-    YouTubeSearchFinished,
+    YouTubeSearchResult {
+        video: YouTubeVideo,
+        generation: u64,
+    },
+    YouTubeSearchFinished {
+        generation: u64,
+    },
     YouTubeStreamUrlReady {
         url: String,
         video: YouTubeVideo,

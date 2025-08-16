@@ -60,9 +60,9 @@ fn handle_work_request(
             let result = WorkDone::SingleLrcIndexed { lrc_entry: LrcIndex::index_single(path)? };
             event_tx.send(AppEvent::WorkDone(Ok(result)))?;
         }
-        WorkRequest::YouTubeSearch { query } => {
+        WorkRequest::YouTubeSearch { query, generation } => {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-            rt.block_on(youtube::search(&query, youtube_cache_ttl, event_tx.clone()))?;
+            rt.block_on(youtube::search(&query, generation, youtube_cache_ttl, event_tx.clone()))?;
         }
         WorkRequest::GetYouTubeStreamUrl { video, context } => {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;

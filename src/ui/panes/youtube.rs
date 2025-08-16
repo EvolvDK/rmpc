@@ -54,6 +54,7 @@ pub struct YouTubePane {
     focus: Focus,
     library_video_focus: LibraryVideoFocus,
     // Search state
+    search_generation: u64,
     search_input: Input,
     raw_search_results: Vec<YouTubeVideo>,
     filtered_search_results: Vec<(i64, YouTubeVideo)>,
@@ -91,6 +92,7 @@ impl YouTubePane {
         Ok(Self {
             focus: Focus::default(),
             library_video_focus: LibraryVideoFocus::default(),
+            search_generation: 0,
             search_input: Input::default(),
             raw_search_results: Vec::new(),
             filtered_search_results: Vec::new(),
@@ -111,15 +113,19 @@ impl YouTubePane {
     }
 
     // Search methods
-    pub fn on_search_result(&mut self, video: YouTubeVideo) {
-        self.raw_search_results.push(video);
-        self.filter_search_results();
+    pub fn on_search_result(&mut self, video: YouTubeVideo, generation: u64) {
+        if generation == self.search_generation {
+            self.raw_search_results.push(video);
+            self.filter_search_results();
+        }
     }
 
-    pub fn on_search_complete(&mut self) {
-        self.is_loading_search = false;
-        if !self.filtered_search_results.is_empty() {
-            self.search_list_state.select(Some(0));
+    pub fn on_search_complete(&mut self, generation: u64) {
+        if generation == self.search_generation {
+            self.is_loading_search = false;
+            if !self.filtered_search_results.is_empty() {
+                self.search_list_state.select(Some(0));
+            }
         }
     }
 
@@ -257,10 +263,14 @@ impl YouTubePane {
                 let query = self.search_input.value().to_string();
                 if !query.is_empty() {
                     status_info!("Searching YouTube for: {}", query);
+                    self.search_generation += 1;
                     self.is_loading_search = true;
                     self.raw_search_results.clear();
                     self.filter_search_results();
-                    ctx.work_sender.send(WorkRequest::YouTubeSearch { query })?;
+                    ctx.work_sender.send(WorkRequest::YouTubeSearch {
+                        query,
+                        generation: self.search_generation,
+                    })?;
                 }
             }
             KeyCode::Down | KeyCode::Tab => {
