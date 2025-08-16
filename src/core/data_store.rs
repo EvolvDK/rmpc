@@ -96,9 +96,21 @@ impl DataStore {
 
         if user_version < 2 {
             let tx = conn.transaction()?;
-            tx.execute(
-                "ALTER TABLE queue_youtube_metadata ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
-                [],
+            tx.execute_batch(
+                "
+                ALTER TABLE queue_youtube_metadata RENAME TO _queue_youtube_metadata_old;
+
+                CREATE TABLE queue_youtube_metadata (
+                    song_id     INTEGER PRIMARY KEY,
+                    youtube_id  TEXT NOT NULL,
+                    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                INSERT INTO queue_youtube_metadata (song_id, youtube_id)
+                SELECT song_id, youtube_id FROM _queue_youtube_metadata_old;
+
+                DROP TABLE _queue_youtube_metadata_old;
+                ",
             )?;
             tx.pragma_update(None, "user_version", &Self::DB_VERSION)?;
             tx.commit()?;
