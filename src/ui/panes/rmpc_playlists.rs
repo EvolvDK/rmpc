@@ -101,7 +101,8 @@ impl RmpcPlaylistsPane {
             match item {
                 PlaylistItem::YouTube(video) => {
                     if let Some(video) = self.youtube_library.get(&video.youtube_id) {
-                        self.preview_data = Some(video.to_preview(key_style, group_style));
+                        self.preview_data =
+                            Some(video.to_song_for_preview().to_preview(key_style, group_style));
                     }
                 }
                 PlaylistItem::Local(path) => {

@@ -18,8 +18,8 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     symbols::border,
-    text::{Line, Span},
-    widgets::{Block, Borders, ListItem},
+    text::Span,
+    widgets::{Block, Borders},
 };
 use tab_screen::TabScreen;
 
@@ -29,7 +29,6 @@ use self::{
 };
 use crate::{
     core::data_store::models::{PlaylistItem, YouTubeVideo},
-    shared::mpd_query::PreviewGroup,
     MpdQueryResult,
     shared::events::AppEvent,
     config::{
