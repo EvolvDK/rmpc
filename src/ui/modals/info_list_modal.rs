@@ -48,63 +48,64 @@ pub struct KeyValue {
 impl KeyValues {
     pub fn from_song(song: &Song, ctx: &Ctx) -> Self {
         let mut result = Vec::new();
+
         result.push(KeyValue {
             key: "File".to_owned(),
             value: song.file.clone(),
         });
-        let file_name = song.file_name().unwrap_or_default();
-        if !file_name.is_empty() {
-            result.push(KeyValue {
-                key: "Filename".to_owned(),
-                value: file_name.into_owned(),
-            });
-        }
+        result.push(KeyValue {
+            key: "Filename".to_owned(),
+            value: song.file_name().unwrap_or_default().into_owned(),
+        });
 
-        if let Ok(Some(youtube_id)) = ctx.data_store.get_youtube_id_for_song(song.id) {
+        // Enrich with YouTube data if available
+        if let Some(youtube_id) = ctx.queue_youtube_ids.get(&song.id) {
+            if let Some(video_info) = ctx.youtube_library.get(youtube_id) {
+                result.push(KeyValue {
+                    key: "Title".to_owned(),
+                    value: video_info.title.clone(),
+                });
+                result.push(KeyValue {
+                    key: "Artist".to_owned(),
+                    value: video_info.channel.clone(),
+                });
+                result.push(KeyValue {
+                    key: "Duration".to_owned(),
+                    value: Duration::from_secs(video_info.duration_secs as u64).to_string(),
+                });
+            }
             result.push(KeyValue {
                 key: "YouTube ID".to_owned(),
-                value: youtube_id,
+                value: youtube_id.clone(),
             });
+        } else {
+            // Standard fields for local files
+            if let Some(title) = song.metadata.get("Title") {
+                result.push(KeyValue {
+                    key: "Title".to_owned(),
+                    value: title.first().to_string(),
+                });
+            }
+            if let Some(artist) = song.metadata.get("Artist") {
+                result.push(KeyValue {
+                    key: "Artist".to_owned(),
+                    value: artist.first().to_string(),
+                });
+            }
+            if let Some(duration) = song.duration {
+                result.push(KeyValue {
+                    key: "Duration".to_owned(),
+                    value: duration.to_string(),
+                });
+            }
         }
 
-        if let Some(title) = song.metadata.get("Title") {
-            result.extend(title.iter().map(|item| KeyValue {
-                key: "Title".to_owned(),
-                value: item.to_owned(),
-            }));
-        }
-
-        if let Some(artist) = song.metadata.get("Artist") {
-            result.extend(artist.iter().map(|item| KeyValue {
-                key: "Artist".to_owned(),
-                value: item.to_owned(),
-            }));
-        }
-
-        if let Some(album) = song.metadata.get("Album") {
-            result.extend(album.iter().map(|item| KeyValue {
-                key: "Album".to_owned(),
-                value: item.to_owned(),
-            }));
-        }
-
-        let duration =
-            song.duration.as_ref().map(|d| d.as_secs().to_string()).unwrap_or_default();
-        if !duration.is_empty() {
+        if let Some(added) = song.added {
             result.push(KeyValue {
-                key: "Duration".to_owned(),
-                value: duration,
+                key: "Added".to_owned(),
+                value: added.to_rfc2822(),
             });
         }
-
-        result.extend(song.metadata.iter().filter(|(key, _)| {
-            !["Title", "Album", "Artist", "Duration"].contains(&key.as_str())
-        }).flat_map(|(k, v)| {
-            v.iter().map(|item| KeyValue {
-                key: k.to_owned(),
-                value: item.to_owned(),
-            })
-        }));
 
         KeyValues(result)
     }

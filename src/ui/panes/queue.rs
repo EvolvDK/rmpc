@@ -15,6 +15,7 @@ use ratatui::{
 use super::{CommonAction, Pane};
 use crate::{
     core::data_store::models::PlaylistItem,
+    mpd::commands::metadata_tag::MetadataTag,
     MpdQueryResult,
     config::{
         keys::{
@@ -309,6 +310,44 @@ impl Pane for QueuePane {
         let Ctx { queue, config, .. } = ctx;
         self.calculate_areas(area, ctx)?;
 
+        let enriched_queue: std::borrow::Cow<Vec<Song>> = if ctx.queue_youtube_ids.is_empty() {
+            std::borrow::Cow::Borrowed(queue)
+        } else {
+            let enriched: Vec<Song> = queue
+                .iter()
+                .map(|song| {
+                    if let Some(youtube_id) = ctx.queue_youtube_ids.get(&song.id) {
+                        if let Some(video_info) = ctx.youtube_library.get(youtube_id) {
+                            let mut enriched_song = song.clone();
+                            enriched_song.duration = Some(std::time::Duration::from_secs(
+                                video_info.duration_secs as u64,
+                            ));
+                            enriched_song.metadata.insert(
+                                "Title".to_string(),
+                                MetadataTag::Single(video_info.title.clone()),
+                            );
+                            enriched_song.metadata.insert(
+                                "Artist".to_string(),
+                                MetadataTag::Single(video_info.channel.clone()),
+                            );
+                            if let Some(album) = &video_info.album {
+                                enriched_song.metadata.insert(
+                                    "Album".to_string(),
+                                    MetadataTag::Single(album.clone()),
+                                );
+                            } else {
+                                enriched_song.metadata.remove("Album");
+                            }
+                            return enriched_song;
+                        }
+                    }
+                    song.clone()
+                })
+                .collect();
+            std::borrow::Cow::Owned(enriched)
+        };
+        let queue = &*enriched_queue;
+
         let filter_text = self.filter_text();
 
         let table_block = {
@@ -325,10 +364,8 @@ impl Pane for QueuePane {
             b
         };
 
-        self.scrolling_state.set_content_and_viewport_len(
-            ctx.queue.len(),
-            self.areas[Areas::Table].height as usize,
-        );
+        self.scrolling_state
+            .set_content_and_viewport_len(queue.len(), self.areas[Areas::Table].height as usize);
 
         let widths = Layout::horizontal(self.column_widths.as_slice())
             .flex(Flex::Start)

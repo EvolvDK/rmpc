@@ -1,6 +1,11 @@
 pub mod models;
 
-use std::{cell::RefCell, collections::HashSet, fs, path::Path};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
 use rusqlite::Connection;
 use thiserror::Error;
@@ -185,6 +190,22 @@ impl DataStore {
         let mut result = HashSet::new();
         for id in ids {
             result.insert(id?);
+        }
+        Ok(result)
+    }
+
+    /// Returns a map of all MPD song IDs to YouTube video IDs.
+    pub fn get_all_queue_youtube_mappings(
+        &self,
+    ) -> Result<HashMap<u32, String>, DataStoreError> {
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT song_id, youtube_id FROM queue_youtube_metadata")?;
+        let mappings_iter = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+
+        let mut result = HashMap::new();
+        for mapping in mappings_iter {
+            let (song_id, youtube_id) = mapping?;
+            result.insert(song_id, youtube_id);
         }
         Ok(result)
     }

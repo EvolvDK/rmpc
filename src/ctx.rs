@@ -1,6 +1,6 @@
 use std::{
     cell::Cell,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ops::AddAssign,
     time::{Duration, Instant},
 };
@@ -10,7 +10,7 @@ use bon::bon;
 use crossbeam::channel::{SendError, Sender, bounded};
 
 use crate::{
-    core::data_store::DataStore,
+    core::data_store::{models::YouTubeVideo, DataStore},
     AppEvent,
     MpdCommand,
     MpdQuery,
@@ -46,6 +46,8 @@ pub struct Ctx {
     pub(crate) data_store: DataStore,
     pub(crate) status: Status,
     pub(crate) queue: Vec<Song>,
+    pub(crate) youtube_library: HashMap<String, YouTubeVideo>,
+    pub(crate) queue_youtube_ids: HashMap<u32, String>,
     pub(crate) active_tab: TabName,
     pub(crate) supported_commands: HashSet<String>,
     pub(crate) db_update_start: Option<Instant>,
@@ -90,6 +92,12 @@ impl Ctx {
 
         let status = client.get_status()?;
         let queue = client.playlist_info(sticker_support_needed)?.unwrap_or_default();
+        let youtube_library = data_store
+            .get_all_library_videos()?
+            .into_iter()
+            .map(|v| (v.youtube_id.clone(), v))
+            .collect();
+        let queue_youtube_ids = data_store.get_all_queue_youtube_mappings()?;
 
         if !supported_commands.contains("albumart") || !supported_commands.contains("readpicture") {
             config.album_art.method = ImageMethod::None;
@@ -107,6 +115,8 @@ impl Ctx {
             data_store,
             status,
             queue,
+            youtube_library,
+            queue_youtube_ids,
             active_tab,
             supported_commands,
             db_update_start: None,
