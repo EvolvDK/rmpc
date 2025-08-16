@@ -18,7 +18,6 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     symbols::border,
-    text::Span,
     widgets::{Block, Borders},
 };
 use tab_screen::TabScreen;

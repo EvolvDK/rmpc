@@ -14,13 +14,14 @@ use crate::{
     ctx::Ctx,
     mpd::{
         commands::{IdleEvent, State},
+        errors::{ErrorCode, MpdError, MpdFailureResponse},
         mpd_client::{MpdClient, SaveMode},
     },
     shared::{
         events::{AppEvent, WorkDone},
         ext::error::ErrorExt,
         id::{self, Id},
-        macros::{status_error, status_warn},
+        macros::{status_error, status_warn, try_skip},
         mpd_query::{
             EXTERNAL_COMMAND,
             GLOBAL_QUEUE_UPDATE,
@@ -494,7 +495,7 @@ fn main_task<B: Backend + std::io::Write>(
                     {
                         if cmd == "playid" {
                             if let (Some(song_id), Some(pos)) =
-                                (ctx.status.songid, ctx.status.songpos)
+                                (ctx.status.songid, ctx.status.song)
                             {
                                 if let Ok(Some((youtube_id, _))) =
                                     ctx.data_store.get_youtube_id_for_song(song_id)
