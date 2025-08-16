@@ -14,7 +14,7 @@ L'affichage actuel de la file d'attente est incohérent. Les pistes YouTube et l
     - Ajouter un cache `youtube_library: HashMap<String, YouTubeVideo>` pour un accès rapide aux métadonnées par ID YouTube.
     - Ajouter un cache `queue_youtube_ids: HashMap<u32, String>` pour lier les ID de chanson MPD aux ID YouTube.
 - **Action** : Initialiser ces caches au démarrage de l'application en lisant les données depuis le `DataStore`.
-- **Action** : Modifier la logique de rendu du panneau de la file d'attente (`QueuePane`). Pour chaque piste YouTube, elle utilisera les caches pour construire et afficher un objet `Song` temporaire enrichi avec les métadonnées correctes (titre, artiste, album, durée).
+- **Action** : Modifier la logique de rendu de tous les composants de l'interface (`QueuePane`, en-tête, etc.) qui affichent des informations sur les chansons. Pour chaque piste YouTube, ils utiliseront les caches pour construire et afficher un objet `Song` temporaire enrichi avec les métadonnées correctes (titre, artiste, album, durée), garantissant une cohérence visuelle dans toute l'application.
 
 #### 1.2. Standardisation de la modale "Song Info"
 - **Action** : Modifier la modale pour qu'elle affiche un ensemble de champs cohérent pour toutes les pistes.
@@ -37,12 +37,16 @@ Les URLs de streaming YouTube expirent, ce qui provoque des échecs de lecture s
 #### 2.1. Gestion de l'expiration au moment de la lecture (Runtime)
 - **Principe** : Abandonner la vérification au démarrage au profit d'une gestion "lazy" et plus performante.
 - **Action** : Implémenter la logique suivante lorsqu'un utilisateur lance la lecture d'une piste YouTube :
-    1.  Tenter de jouer la piste. Si MPD retourne une erreur indiquant que la ressource n'est pas disponible, cela signifie que l'URL a probablement expiré.
-    2.  Si la lecture échoue, l'application doit automatiquement et de manière transparente :
+    1.  Tenter de jouer la piste. Si MPD retourne une erreur indiquant que la ressource n'est pas disponible (par exemple, erreur `NoExist`), l'application doit déclencher un processus de rafraîchissement.
+    2.  Ce processus doit être **asynchrone** (via une `WorkRequest`) pour ne pas bloquer l'interface utilisateur.
+    3.  **Si le rafraîchissement réussit** :
         -   Récupérer l'ID YouTube permanent de la piste depuis le `DataStore`.
         -   Demander une nouvelle URL de streaming.
         -   Remplacer l'ancienne chanson dans la file d'attente MPD par une nouvelle avec la nouvelle URL, en utilisant `deleteid` et `addid` pour préserver **exactement la même position**.
         -   Relancer la lecture.
+    4.  **Si le rafraîchissement échoue** (par exemple, vidéo supprimée, problème réseau) :
+        -   Informer l'utilisateur via la barre de statut que la piste est indisponible.
+        -   Éviter de retenter la lecture en boucle. Idéalement, sauter à la piste suivante si la lecture automatique est activée.
 
 ## Goal 3: Amélioration du feedback utilisateur et des logs
 
