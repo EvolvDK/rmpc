@@ -28,6 +28,25 @@ L'affichage actuel de la file d'attente est incohérent. Les pistes YouTube et l
     - `Updated`: Timestamp de mise à jour de la chanson dans la file d'attente (nouvelle URL de streaming, nouveau métadata).
     - `YouTube ID`: Identifiant permanent (uniquement pour les pistes YouTube).
 
+#### 1.3. Implémentation du timestamp "Updated"
+- **Problème**: La modale doit afficher un timestamp "Updated" pour savoir quand les métadonnées ou l'URL de streaming ont été rafraîchies. Cette information n'est pas stockée actuellement.
+- **Solution**:
+    - **Modification de la base de données**: Ajouter une colonne `updated_at` à la table `queue_youtube_metadata` pour stocker ce timestamp.
+      ```sql
+      CREATE TABLE IF NOT EXISTS queue_youtube_metadata (
+          song_id     INTEGER PRIMARY KEY,
+          youtube_id  TEXT NOT NULL,
+          updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      ```
+    - **Mise à jour de l'API `DataStore`**:
+        -   Modifier la méthode `get_youtube_id_for_song` pour qu'elle retourne également le timestamp `updated_at`.
+        -   Créer une nouvelle méthode `touch_youtube_song(song_id: u32)` qui met à jour le champ `updated_at` à l'heure actuelle pour une chanson donnée.
+    - **Intégration**:
+        -   Lorsqu'une chanson YouTube est ajoutée à la file d'attente, le `DEFAULT CURRENT_TIMESTAMP` initialisera le champ `updated_at`.
+        -   Lors du rafraîchissement réussi d'une URL de streaming (décrit dans le Goal 2), l'application appellera `data_store.touch_youtube_song()` pour mettre à jour le timestamp.
+        -   La modale "Song Info" lira cette nouvelle information depuis le `DataStore` pour l'afficher.
+
 ## Goal 2: Gestion robuste de l'expiration des URLs YouTube
 
 ### Problème
