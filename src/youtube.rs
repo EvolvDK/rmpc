@@ -50,6 +50,7 @@ impl YouTubeVideo {
         if let Some(album) = &self.album {
             metadata.insert("album".to_string(), MetadataTag::Single(album.clone()));
         }
+        metadata.insert("ID".to_string(), MetadataTag::Single(self.youtube_id.clone()));
 
         crate::mpd::commands::Song {
             file: format!("https://www.youtube.com/watch?v={}", self.youtube_id),
