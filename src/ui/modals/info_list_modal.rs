@@ -59,8 +59,10 @@ impl KeyValues {
         });
 
         // Enrich with YouTube data if available
-        if let Some(youtube_id) = ctx.queue_youtube_ids.get(&song.id) {
-            if let Some(video_info) = ctx.youtube_library.get(youtube_id) {
+        if let Ok(Some((youtube_id, updated_at))) =
+            ctx.data_store.get_youtube_id_for_song(song.id)
+        {
+            if let Some(video_info) = ctx.youtube_library.get(&youtube_id) {
                 result.push(KeyValue {
                     key: "Title".to_owned(),
                     value: video_info.title.clone(),
@@ -76,7 +78,11 @@ impl KeyValues {
             }
             result.push(KeyValue {
                 key: "YouTube ID".to_owned(),
-                value: youtube_id.clone(),
+                value: youtube_id,
+            });
+            result.push(KeyValue {
+                key: "Updated".to_owned(),
+                value: updated_at.to_rfc2822(),
             });
         } else {
             // Standard fields for local files

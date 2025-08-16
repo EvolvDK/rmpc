@@ -7,6 +7,7 @@ use std::{
     path::Path,
 };
 
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use thiserror::Error;
 
@@ -27,7 +28,7 @@ pub struct DataStore {
 }
 
 impl DataStore {
-    const DB_VERSION: u32 = 1;
+    const DB_VERSION: u32 = 2;
 
     /// Creates a new `DataStore` instance, opening or creating the database file
     /// at the default application config location.
@@ -57,54 +58,50 @@ impl DataStore {
     fn apply_migrations(conn: &mut Connection) -> Result<(), DataStoreError> {
         let user_version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
 
-        if user_version < Self::DB_VERSION {
-            if user_version == 0 {
-                let tx = conn.transaction()?;
-
-                tx.execute_batch(
-                    "
-                    -- Pour les métadonnées des pistes dans la file d'attente MPD
+        if user_version < 1 {
+            let tx = conn.transaction()?;
+            tx.execute_batch(
+                "
                     CREATE TABLE IF NOT EXISTS queue_youtube_metadata (
-                        song_id     INTEGER PRIMARY KEY, -- ID de la chanson dans la file d'attente MPD
+                        song_id     INTEGER PRIMARY KEY,
                         youtube_id  TEXT NOT NULL
                     );
-
-                    -- Pour la bibliothèque de vidéos YouTube (remplace youtube_library.json)
-                    -- Ne stocke que les métadonnées permanentes.
                     CREATE TABLE IF NOT EXISTS videos (
                         youtube_id      TEXT PRIMARY KEY NOT NULL,
                         title           TEXT NOT NULL,
                         channel         TEXT NOT NULL,
-                        album           TEXT, -- L'album peut être optionnel
+                        album           TEXT,
                         duration_secs   INTEGER NOT NULL,
-                        thumbnail_url   TEXT -- L'URL de la miniature peut être stockée si elle est stable
+                        thumbnail_url   TEXT
                     );
-
-                    -- Pour définir les playlists (remplace la structure de dossiers yt-playlists/)
-                    -- Conçue pour contenir à la fois des pistes locales et YouTube.
                     CREATE TABLE IF NOT EXISTS playlists (
                         id      INTEGER PRIMARY KEY AUTOINCREMENT,
                         name    TEXT NOT NULL UNIQUE
                     );
-
-                    -- Pour lier les pistes (locales ou YouTube) aux playlists
                     CREATE TABLE IF NOT EXISTS playlist_items (
                         playlist_id         INTEGER NOT NULL,
-                        position            INTEGER NOT NULL, -- Position dans la playlist
-                        video_youtube_id    TEXT, -- Pour les pistes YouTube, NULL pour les locales
-                        file_path           TEXT, -- Pour les pistes locales, NULL pour les YouTube
+                        position            INTEGER NOT NULL,
+                        video_youtube_id    TEXT,
+                        file_path           TEXT,
                         PRIMARY KEY (playlist_id, position),
                         FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
                         FOREIGN KEY (video_youtube_id) REFERENCES videos(youtube_id) ON DELETE CASCADE,
-                        CHECK (video_youtube_id IS NOT NULL OR file_path IS NOT NULL) -- S'assure qu'au moins un type de piste est défini
+                        CHECK (video_youtube_id IS NOT NULL OR file_path IS NOT NULL)
                     );
                     ",
-                )?;
+            )?;
+            tx.pragma_update(None, "user_version", &1)?;
+            tx.commit()?;
+        }
 
-                tx.pragma_update(None, "user_version", &Self::DB_VERSION)?;
-
-                tx.commit()?;
-            }
+        if user_version < 2 {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "ALTER TABLE queue_youtube_metadata ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                [],
+            )?;
+            tx.pragma_update(None, "user_version", &Self::DB_VERSION)?;
+            tx.commit()?;
         }
 
         Ok(())
@@ -127,17 +124,29 @@ impl DataStore {
         Ok(())
     }
 
-    /// Retrieves the YouTube video ID for a given MPD queue song ID.
-    pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>, DataStoreError> {
+    /// Retrieves the YouTube video ID and its update timestamp for a given MPD queue song ID.
+    pub fn get_youtube_id_for_song(
+        &self,
+        song_id: u32,
+    ) -> Result<Option<(String, DateTime<Utc>)>, DataStoreError> {
         let conn = self.conn.borrow();
-        let mut stmt =
-            conn.prepare("SELECT youtube_id FROM queue_youtube_metadata WHERE song_id = ?1")?;
-        let result = stmt.query_row([song_id], |row| row.get(0));
+        let mut stmt = conn
+            .prepare("SELECT youtube_id, updated_at FROM queue_youtube_metadata WHERE song_id = ?1")?;
+        let result = stmt.query_row([song_id], |row| Ok((row.get(0)?, row.get(1)?)));
         match result {
-            Ok(id) => Ok(Some(id)),
+            Ok((id, updated_at)) => Ok(Some((id, updated_at))),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Updates the `updated_at` timestamp for a given YouTube song in the queue.
+    pub fn touch_youtube_song(&self, song_id: u32) -> Result<(), DataStoreError> {
+        self.conn.borrow().execute(
+            "UPDATE queue_youtube_metadata SET updated_at = CURRENT_TIMESTAMP WHERE song_id = ?1",
+            [song_id],
+        )?;
+        Ok(())
     }
 
     /// Removes metadata for a list of MPD queue song IDs.
