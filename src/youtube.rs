@@ -177,6 +177,31 @@ pub async fn get_stream_url(video_id: &str, ttl: Duration) -> Result<String> {
     Ok(url)
 }
 
+pub async fn get_stream_url_and_metadata(video_id: &str) -> Result<(String, YouTubeVideo)> {
+    let output = Command::new("yt-dlp")
+        .arg("-g")
+        .arg("--dump-json")
+        .arg("-f")
+        .arg("bestaudio")
+        .arg(format!("https://www.youtube.com/watch?v={}", video_id))
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("yt-dlp get_stream_url_and_metadata failed: {}", stderr));
+    }
+
+    let output_str = String::from_utf8(output.stdout)?;
+    let mut lines = output_str.lines();
+    let url = lines.next().context("yt-dlp did not return a URL")?.to_string();
+    let metadata_json = lines.next().context("yt-dlp did not return JSON metadata")?;
+
+    let video_info: YtDlpVideoInfo = serde_json::from_str(metadata_json)?;
+
+    Ok((url, video_info.into()))
+}
+
 pub async fn get_video_info(video_id: &str, ttl: Duration) -> Result<Option<YouTubeVideo>> {
     if ttl > Duration::ZERO {
         if let Some((created, video_info)) = CACHE.video_info.lock().unwrap().get(video_id) {

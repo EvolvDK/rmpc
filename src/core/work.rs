@@ -73,6 +73,25 @@ fn handle_work_request(
             };
             event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
         }
+        WorkRequest::RefreshYouTubeStream {
+            old_song_id,
+            position,
+            youtube_id,
+            video_title,
+        } => {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            let result = rt.block_on(youtube::get_stream_url_and_metadata(&youtube_id));
+            let work_done = match result {
+                Ok((new_url, video)) => WorkDone::YouTubeStreamRefreshed {
+                    new_url,
+                    video,
+                    old_song_id,
+                    position,
+                },
+                Err(_) => WorkDone::YouTubeStreamRefreshFailed { video_title },
+            };
+            event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
+        }
         WorkRequest::YouTubeGetVideoInfo { id } => {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
             if let Ok(Some(video)) = rt.block_on(youtube::get_video_info(&id, youtube_cache_ttl)) {

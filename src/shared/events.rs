@@ -56,6 +56,12 @@ pub(crate) enum WorkRequest {
         video: YouTubeVideo,
         context: Option<RefreshContext>,
     },
+    RefreshYouTubeStream {
+        old_song_id: u32,
+        position: u32,
+        youtube_id: String,
+        video_title: String,
+    },
     YouTubeGetVideoInfo {
         id: String,
     },
@@ -76,6 +82,15 @@ pub(crate) enum WorkDone {
     YouTubeStreamUrlFailed {
         video: YouTubeVideo,
         context: Option<RefreshContext>,
+    },
+    YouTubeStreamRefreshed {
+        new_url: String,
+        video: YouTubeVideo,
+        old_song_id: u32,
+        position: u32,
+    },
+    YouTubeStreamRefreshFailed {
+        video_title: String,
     },
     MpdCommandFinished { id: &'static str, target: Option<PaneType>, data: MpdQueryResult },
     YouTubeVideoInfoFetched(YouTubeVideo),

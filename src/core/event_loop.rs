@@ -471,6 +471,32 @@ fn main_task<B: Backend + std::io::Write>(
                     WorkDone::None => {}
                 },
                 AppEvent::WorkDone(Err(err)) => {
+                    if let Some(MpdError::Mpd(MpdFailureResponse {
+                        code: ErrorCode::NoExist,
+                        command: cmd,
+                        ..
+                    })) = err.downcast_ref::<MpdError>()
+                    {
+                        if cmd == "playid" {
+                            if let (Some(song_id), Some(pos)) =
+                                (ctx.status.songid, ctx.status.songpos)
+                            {
+                                if let Ok(Some((youtube_id, _))) =
+                                    ctx.data_store.get_youtube_id_for_song(song_id)
+                                {
+                                    if let Some(song) = ctx.queue.get(pos as usize) {
+                                        let video_title = song.title_str("").to_string();
+                                        try_skip!(ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
+                                            old_song_id: song_id,
+                                            position: pos,
+                                            youtube_id,
+                                            video_title,
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     status_error!("{}", err);
                 }
                 AppEvent::Resized { columns, rows } => {

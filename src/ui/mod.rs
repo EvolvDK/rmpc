@@ -638,6 +638,33 @@ impl<'ui> Ui<'ui> {
         Ok(ctx.render()?)
     }
 
+    pub fn on_youtube_stream_refreshed(
+        &mut self,
+        url: String,
+        video: YouTubeVideo,
+        old_song_id: u32,
+        position: u32,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        let video_clone = video.clone();
+        ctx.data_store.update_video_metadata(&video_clone)?;
+        ctx.youtube_library.insert(video_clone.youtube_id.clone(), video_clone);
+        ctx.data_store.touch_youtube_song(old_song_id)?;
+
+        ctx.query()
+            .id("refresh_youtube_song")
+            .query(move |client| {
+                client.delete_id(old_song_id)?;
+                let song_id = client
+                    .add_id(&url, Some(QueuePosition::Absolute(position as usize)))?
+                    .id
+                    .context("MPD did not return an ID for the refreshed song")?;
+                client.play_id(song_id)?;
+                Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
+            });
+        Ok(())
+    }
+
     pub fn on_youtube_stream_url_failed(
         &mut self,
         video: YouTubeVideo,
