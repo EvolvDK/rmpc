@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode};
@@ -7,6 +7,7 @@ use itertools::Itertools;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Stylize,
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
@@ -57,7 +58,7 @@ pub struct YouTubePane {
     search_generation: u64,
     search_input: Input,
     raw_search_results: Vec<YouTubeVideo>,
-    filtered_search_results: Vec<(i64, YouTubeVideo)>,
+    filtered_search_results: Vec<(i64, YouTubeVideo, Vec<usize>)>,
     search_list_state: ListState,
     is_loading_search: bool,
     matcher: SkimMatcherV2,
@@ -133,17 +134,17 @@ impl YouTubePane {
         let query = self.search_input.value();
         if query.is_empty() {
             self.filtered_search_results =
-                self.raw_search_results.clone().into_iter().map(|v| (100, v)).collect();
+                self.raw_search_results.clone().into_iter().map(|v| (100, v, vec![])).collect();
         } else {
             self.filtered_search_results = self
                 .raw_search_results
                 .iter()
                 .filter_map(|video| {
                     self.matcher
-                        .fuzzy_match(&video.title, query)
-                        .map(|score| (score, video.clone()))
+                        .fuzzy_indices(&video.title, query)
+                        .map(|(score, indices)| (score, video.clone(), indices))
                 })
-                .sorted_by_key(|(score, _)| -*score)
+                .sorted_by_key(|(score, _, _)| -*score)
                 .collect();
         }
 
@@ -305,7 +306,7 @@ impl YouTubePane {
                 ),
                 CommonAction::Confirm => {
                     if let Some(index) = self.search_list_state.selected() {
-                        if let Some((_, video)) = self.filtered_search_results.get(index) {
+                        if let Some((_, video, _)) = self.filtered_search_results.get(index) {
                             self.add_youtube_video_to_queue(video, ctx)?;
                         }
                     }
@@ -470,6 +471,45 @@ impl YouTubePane {
         }
         Ok(())
     }
+
+    fn render_search_result_item<'a>(
+        video: &'a YouTubeVideo,
+        indices: &'a [usize],
+        ctx: &'a Ctx,
+    ) -> ListItem<'a> {
+        let highlight_style = ctx.config.theme.highlighted_item_style.bold();
+        let highlighted_indices: HashSet<usize> = indices.iter().cloned().collect();
+
+        let mut spans = Vec::new();
+        let mut current_chars = String::new();
+        let mut is_currently_highlighted = false;
+
+        // Nous ne pouvons surligner que le titre, car les indices ne s'appliquent qu'à lui.
+        for (i, char) in video.title.char_indices() {
+            let should_be_highlighted = highlighted_indices.contains(&i);
+
+            if i == 0 {
+                is_currently_highlighted = should_be_highlighted;
+            } else if should_be_highlighted != is_currently_highlighted {
+                let style =
+                    if is_currently_highlighted { highlight_style } else { Default::default() };
+                spans.push(Span::styled(current_chars.clone(), style));
+                current_chars.clear();
+                is_currently_highlighted = should_be_highlighted;
+            }
+            current_chars.push(char);
+        }
+
+        if !current_chars.is_empty() {
+            let style = if is_currently_highlighted { highlight_style } else { Default::default() };
+            spans.push(Span::styled(current_chars, style));
+        }
+
+        // Ajouter le reste de la chaîne (artiste) sans style particulier.
+        spans.push(Span::raw(format!(" - {}", video.channel)));
+
+        ListItem::new(Line::from(spans))
+    }
 }
 
 impl Pane for YouTubePane {
@@ -523,7 +563,7 @@ impl Pane for YouTubePane {
         let search_items: Vec<ListItem> = self
             .filtered_search_results
             .iter()
-            .map(|(_, v)| ListItem::new(format!("{} - {}", v.title, v.channel)))
+            .map(|(_, v, indices)| Self::render_search_result_item(v, indices, ctx))
             .collect();
         let search_list = List::new(search_items)
             .block(results_block)
