@@ -25,6 +25,7 @@ L'affichage actuel de la file d'attente est incohérent. Les pistes YouTube et l
     - `Artist`: Artiste ou nom de la chaîne.
     - `Duration`: Durée de la chanson.
     - `Added`: Timestamp d'ajout à la file d'attente (fourni par MPD).
+    - `Updated`: Timestamp de mise à jour de la chanson dans la file d'attente (nouvelle URL de streaming, nouveau métadata).
     - `YouTube ID`: Identifiant permanent (uniquement pour les pistes YouTube).
 
 ## Goal 2: Gestion robuste de l'expiration des URLs YouTube
