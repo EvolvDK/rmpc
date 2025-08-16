@@ -90,10 +90,6 @@ pub(crate) fn render_preview_data(
     frame.render_widget(list, area);
 }
 
-pub(crate) trait ToPreview {
-    fn to_preview(&self, key_style: Style, group_style: Style) -> Vec<PreviewGroup>;
-}
-
 pub mod album_art;
 pub mod albums;
 pub mod cava;
@@ -333,8 +329,8 @@ pub(crate) trait Pane {
     }
 }
 
-impl ToPreview for Song {
-    fn to_preview(&self, key_style: Style, group_style: Style) -> Vec<PreviewGroup> {
+impl Song {
+    pub(crate) fn to_preview(&self, key_style: Style, group_style: Style) -> Vec<PreviewGroup> {
         let separator = Span::from(": ");
         let start_of_line_spacer = Span::from(" ");
 
