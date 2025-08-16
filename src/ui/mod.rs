@@ -78,6 +78,12 @@ pub struct StatusMessage {
 }
 
 #[derive(Debug)]
+struct PendingPlaylistImport {
+    name: String,
+    video_ids: Vec<String>,
+}
+
+#[derive(Debug)]
 pub struct Ui<'ui> {
     panes: PaneContainer<'ui>,
     modals: Vec<Box<dyn Modal>>,
@@ -85,6 +91,7 @@ pub struct Ui<'ui> {
     layout: SizedPaneOrSplit,
     area: Rect,
     pending_youtube_imports: usize,
+    pending_playlist_import: Vec<PendingPlaylistImport>,
 }
 
 const OPEN_DECODERS_MODAL: &str = "open_decoders_modal";
@@ -133,6 +140,7 @@ impl<'ui> Ui<'ui> {
             area: Rect::default(),
             tabs: Self::init_tabs(ctx)?,
             pending_youtube_imports: 0,
+            pending_playlist_import: Vec::new(),
         })
     }
 
@@ -899,52 +907,81 @@ impl<'ui> Ui<'ui> {
             video_id: String,
         }
 
-        let library = ctx.data_store.get_all_library_videos()?;
-        let all_video_ids: std::collections::HashSet<String> =
-            library.into_iter().map(|v| v.youtube_id).collect();
-        let mut new_videos_count = 0;
+        let mut pending_playlists = Vec::new();
+        let mut all_required_video_ids = std::collections::HashSet::new();
 
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "csv") {
                 if let Some(playlist_name) = path.file_stem().and_then(|s| s.to_str()) {
-                    let playlist_id = match ctx.data_store.create_playlist(playlist_name) {
-                        Ok(id) => id,
-                        Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
-                            status_warn!("Playlist '{}' already exists, skipping.", playlist_name);
-                            continue;
-                        }
-                        Err(e) => return Err(e.into()),
-                    };
                     let mut reader = csv::Reader::from_path(&path)?;
+                    let mut video_ids = Vec::new();
                     for result in reader.deserialize() {
                         let record: TakeoutSong = result?;
-                        if !all_video_ids.contains(&record.video_id) {
-                            ctx.work_sender.send(WorkRequest::YouTubeGetVideoInfo {
-                                id: record.video_id.clone(),
-                            })?;
-                            new_videos_count += 1;
-                        }
-                        ctx.data_store
-                            .add_youtube_video_to_playlist(playlist_id, &record.video_id)?;
+                        all_required_video_ids.insert(record.video_id.clone());
+                        video_ids.push(record.video_id);
                     }
-                    status_info!("Imported playlist '{}'.", playlist_name);
+                    pending_playlists.push(PendingPlaylistImport {
+                        name: playlist_name.to_string(),
+                        video_ids,
+                    });
                 }
             }
         }
 
-        if new_videos_count > 0 {
-            self.pending_youtube_imports = new_videos_count;
-            status_info!(
-                "Fetching info for {} new videos in the background.",
-                new_videos_count
-            );
-        } else {
-            status_info!("Playlists import complete. No new videos found.");
-        }
-        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+        let existing_library_ids: std::collections::HashSet<String> = ctx
+            .data_store
+            .get_all_library_videos()?
+            .into_iter()
+            .map(|v| v.youtube_id)
+            .collect();
 
+        let missing_video_ids: Vec<_> = all_required_video_ids
+            .difference(&existing_library_ids)
+            .cloned()
+            .collect();
+
+        if !missing_video_ids.is_empty() {
+            self.pending_youtube_imports = missing_video_ids.len();
+            self.pending_playlist_import = pending_playlists;
+            status_info!(
+                "Importing {} playlists. Fetching info for {} new videos...",
+                self.pending_playlist_import.len(),
+                self.pending_youtube_imports
+            );
+            for video_id in missing_video_ids {
+                ctx.work_sender.send(WorkRequest::YouTubeGetVideoInfo { id: video_id })?;
+            }
+        } else {
+            self.pending_playlist_import = pending_playlists;
+            self.on_finalize_playlist_import(ctx)?;
+        }
+
+        Ok(())
+    }
+
+    fn on_finalize_playlist_import(&mut self, ctx: &mut Ctx) -> Result<()> {
+        let pending = std::mem::take(&mut self.pending_playlist_import);
+        let playlist_count = pending.len();
+        for playlist_to_import in pending {
+            let playlist_id = match ctx.data_store.create_playlist(&playlist_to_import.name) {
+                Ok(id) => id,
+                Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
+                    status_warn!("Playlist '{}' already exists, skipping.", playlist_to_import.name);
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            for video_id in playlist_to_import.video_ids {
+                ctx.data_store
+                    .add_youtube_video_to_playlist(playlist_id, &video_id)?;
+            }
+        }
+
+        status_info!("Successfully imported {} playlists.", playlist_count);
+        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
         Ok(())
     }
 
@@ -1098,6 +1135,9 @@ impl<'ui> Ui<'ui> {
             }
             UiAppEvent::ImportYouTubePlaylists { path } => {
                 self.on_import_youtube_playlists(path, ctx)?;
+            }
+            UiAppEvent::FinalizePlaylistImport => {
+                self.on_finalize_playlist_import(ctx)?;
             }
         }
         Ok(())
@@ -1349,6 +1389,7 @@ pub enum UiAppEvent {
     ImportYouTubePlaylists {
         path: PathBuf,
     },
+    FinalizePlaylistImport,
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
