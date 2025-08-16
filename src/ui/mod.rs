@@ -1272,6 +1272,10 @@ impl<'ui> Ui<'ui> {
                 ) => {
                     ctx.data_store
                         .add_youtube_song_to_queue(song_id, &video.youtube_id)?;
+                    ctx.data_store.add_video_to_library(&video)?;
+                    ctx.youtube_library
+                        .insert(video.youtube_id.clone(), video.clone());
+                    ctx.queue_youtube_ids.insert(song_id, video.youtube_id.clone());
                     if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
                         p.add_video(video.clone());
                     }
