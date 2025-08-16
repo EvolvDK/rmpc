@@ -1,6 +1,5 @@
 use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
-use crate::ui::panes::ToPreview;
 use anyhow::{Context, Result};
 use enum_map::EnumMap;
 use itertools::Itertools;

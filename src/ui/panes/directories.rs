@@ -23,7 +23,6 @@ use crate::{
         browser::BrowserPane,
         dir_or_song::DirOrSong,
         dirstack::{DirStack, DirStackItem},
-        panes::ToPreview,
         widgets::browser::{Browser, BrowserArea},
         UiEvent,
     },

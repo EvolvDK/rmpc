@@ -30,7 +30,6 @@ use self::{
 use crate::{
     core::data_store::models::{PlaylistItem, YouTubeVideo},
     shared::mpd_query::PreviewGroup,
-    ui::panes::ToPreview,
     MpdQueryResult,
     shared::events::AppEvent,
     config::{

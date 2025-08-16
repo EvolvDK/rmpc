@@ -24,7 +24,7 @@ use crate::{
     },
     ui::{
         modals::menu,
-        panes::{render_preview_data, Pane, ToPreview},
+        panes::{render_preview_data, Pane},
         UiAppEvent,
     },
 };
