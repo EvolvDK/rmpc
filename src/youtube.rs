@@ -7,7 +7,7 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
-use tokio::{io::{AsyncBufReadExt, BufReader}, process::Command};
+use tokio::{io::{AsyncBufReadExt, BufReader}, process::{Child, Command}};
 
 use crate::{
     core::data_store::models::YouTubeVideo,
@@ -74,6 +74,16 @@ static CACHE: Lazy<Cache> = Lazy::new(|| Cache {
     video_info: Default::default(),
 });
 
+struct ChildProcessGuard(Child);
+
+impl Drop for ChildProcessGuard {
+    fn drop(&mut self) {
+        // Tenter de tuer le processus enfant. C'est la meilleure tentative que nous puissions faire.
+        // S'il a déjà terminé, cela échouera silencieusement, ce qui est acceptable.
+        let _ = self.0.start_kill();
+    }
+}
+
 /// Exécute une recherche sur YouTube via yt-dlp et retourne une liste de vidéos.
 ///
 /// # Arguments
@@ -89,19 +99,15 @@ pub async fn search(
     // à gérer correctement sans introduire de potentiels bugs de cohérence.
     // Une implémentation future pourrait stocker les résultats avec leur génération.
 
-    let mut cmd = Command::new("yt-dlp")
+    let child = Command::new("yt-dlp")
         .arg("--dump-json")
         .arg(format!("https://music.youtube.com/search?q={}", query))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    
-    //let mut cmd = Command::new("yt-dlp")
-        //.arg("--dump-json")
-        //.arg("--match-filters")
-        //.arg("categories*='Music'")
-        //.arg(format!("ytsearch10:{}", query)) // Recherche les 10 premiers résultats
-        //.stdout(std::process::Stdio::piped())
+
+    let mut guard = ChildProcessGuard(child);
+    let cmd = &mut guard.0;
 
     let stdout = cmd.stdout.take().context("Failed to capture yt-dlp stdout")?;
     let mut reader = BufReader::new(stdout).lines();
@@ -119,7 +125,7 @@ pub async fn search(
         }
     }
 
-    let status = cmd.wait().await?;
+    let status = guard.0.wait().await?;
     if !status.success() {
         return Err(anyhow::anyhow!("yt-dlp process exited with non-zero status"));
     }
