@@ -91,6 +91,8 @@ pub async fn search(
 
     let mut cmd = Command::new("yt-dlp")
         .arg("--dump-json")
+        .arg("--match-filters")
+        .arg("categories*='Music'")
         .arg(format!("ytsearch10:{}", query)) // Recherche les 10 premiers résultats
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
