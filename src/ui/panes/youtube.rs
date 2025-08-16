@@ -598,7 +598,7 @@ impl Pane for YouTubePane {
                 let preview_data = self.get_selected_video().map(|video| {
                     let key_style = ctx.config.theme.preview_label_style;
                     let group_style = ctx.config.theme.preview_metadata_group_style;
-                    video.to_preview(key_style, group_style)
+                    video.to_song_for_preview().to_preview(key_style, group_style)
                 });
 
                 if let Some(data) = preview_data {

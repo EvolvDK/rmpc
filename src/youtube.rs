@@ -38,6 +38,28 @@ impl From<YtDlpVideoInfo> for YouTubeVideo {
     }
 }
 
+impl YouTubeVideo {
+    /// Converts a YouTubeVideo into a generic Song structure for previewing.
+    pub(crate) fn to_song_for_preview(&self) -> crate::mpd::commands::Song {
+        use crate::mpd::commands::metadata_tag::MetadataTag;
+        use std::collections::HashMap;
+
+        let mut metadata = HashMap::new();
+        metadata.insert("title".to_string(), MetadataTag::Single(self.title.clone()));
+        metadata.insert("artist".to_string(), MetadataTag::Single(self.channel.clone()));
+        if let Some(album) = &self.album {
+            metadata.insert("album".to_string(), MetadataTag::Single(album.clone()));
+        }
+
+        crate::mpd::commands::Song {
+            file: format!("https://www.youtube.com/watch?v={}", self.youtube_id),
+            duration: Some(std::time::Duration::from_secs(self.duration_secs as u64)),
+            metadata,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Cache {
     searches: Mutex<HashMap<String, (Instant, Vec<YtDlpVideoInfo>)>>,

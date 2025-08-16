@@ -1507,36 +1507,3 @@ impl Config {
     }
 }
 
-impl ToPreview for YouTubeVideo {
-    fn to_preview(&self, key_style: Style, group_style: Style) -> Vec<PreviewGroup> {
-        let mut group = PreviewGroup::new(Some("YouTube Info"), Some(group_style));
-        group.push(ListItem::new(Line::from(vec![
-            Span::styled("ID", key_style),
-            Span::raw(": "),
-            Span::raw(self.youtube_id.clone()),
-        ])));
-        group.push(ListItem::new(Line::from(vec![
-            Span::styled("Title", key_style),
-            Span::raw(": "),
-            Span::raw(self.title.clone()),
-        ])));
-        group.push(ListItem::new(Line::from(vec![
-            Span::styled("Channel", key_style),
-            Span::raw(": "),
-            Span::raw(self.channel.clone()),
-        ])));
-        if let Some(album) = &self.album {
-            group.push(ListItem::new(Line::from(vec![
-                Span::styled("Album", key_style),
-                Span::raw(": "),
-                Span::raw(album.clone()),
-            ])));
-        }
-        group.push(ListItem::new(Line::from(vec![
-            Span::styled("Duration", key_style),
-            Span::raw(": "),
-            Span::raw(format!("{}s", self.duration_secs)),
-        ])));
-        vec![group]
-    }
-}
