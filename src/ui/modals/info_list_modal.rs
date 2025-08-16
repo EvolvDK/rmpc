@@ -80,13 +80,13 @@ impl KeyValues {
             });
         } else {
             // Standard fields for local files
-            if let Some(title) = song.metadata.get("Title") {
+            if let Some(title) = song.metadata.get("title") {
                 result.push(KeyValue {
                     key: "Title".to_owned(),
                     value: title.first().to_string(),
                 });
             }
-            if let Some(artist) = song.metadata.get("Artist") {
+            if let Some(artist) = song.metadata.get("artist") {
                 result.push(KeyValue {
                     key: "Artist".to_owned(),
                     value: artist.first().to_string(),

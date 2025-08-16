@@ -323,20 +323,20 @@ impl Pane for QueuePane {
                                 video_info.duration_secs as u64,
                             ));
                             enriched_song.metadata.insert(
-                                "Title".to_string(),
+                                "title".to_string(),
                                 MetadataTag::Single(video_info.title.clone()),
                             );
                             enriched_song.metadata.insert(
-                                "Artist".to_string(),
+                                "artist".to_string(),
                                 MetadataTag::Single(video_info.channel.clone()),
                             );
                             if let Some(album) = &video_info.album {
                                 enriched_song.metadata.insert(
-                                    "Album".to_string(),
+                                    "album".to_string(),
                                     MetadataTag::Single(album.clone()),
                                 );
                             } else {
-                                enriched_song.metadata.remove("Album");
+                                enriched_song.metadata.remove("album");
                             }
                             return enriched_song;
                         }
