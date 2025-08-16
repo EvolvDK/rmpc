@@ -1,182 +1,62 @@
-# Plan d'implémentation : Système de persistance de données avec SQLite
+# Plan de refactorisation : Amélioration de la gestion des métadonnées et de la lecture
 
-Ce document décrit les étapes nécessaires pour implémenter un système de persistance de données unifié en utilisant une base de données SQLite. Ce système remplacera les approches précédentes (tags `Comment`, `stickers`) pour les métadonnées de la file d'attente, et migrera également le stockage de la bibliothèque YouTube et des playlists depuis des fichiers JSON.
+Ce document formalise le plan d'action pour résoudre les problèmes d'affichage des métadonnées dans la file d'attente et pour gérer de manière robuste l'expiration des URLs de streaming YouTube.
 
-## 1. Objectifs
+## Goal 1: Affichage unifié et enrichi des métadonnées
 
-### Objectif principal
-Créer un système de stockage unique, robuste et performant basé sur SQLite pour toutes les données persistantes de l'application, incluant :
-1.  Les métadonnées des pistes YouTube dans la file d'attente MPD (ID YouTube).
-2.  La bibliothèque de vidéos YouTube (`youtube_library.json`).
-3.  Les playlists YouTube de l'utilisateur (stockées dans le répertoire `yt-playlists/`).
+### Problème
+L'affichage actuel de la file d'attente est incohérent. Les pistes YouTube et locales affichent "Unknown" pour le titre et l'artiste, et la modale "Song Info" présente des informations différentes selon le type de piste.
 
-### Objectifs secondaires
-- **Consolidation** : Unifier la gestion des données dans un seul module pour améliorer la cohérence et la maintenabilité.
-- **Performance et Scalabilité** : Remplacer le parsing JSON par des requêtes SQL pour une meilleure performance, surtout avec de grandes bibliothèques.
-- **Intégrité des données** : Utiliser les fonctionnalités de SQLite (transactions, contraintes) pour garantir la robustesse des données.
-- **Découplage** : Rendre la gestion des métadonnées indépendante des fonctionnalités spécifiques de MPD.
+### Solution
 
-### Objectif de nettoyage
-Éliminer complètement le code des approches précédentes qui se sont avérées inefficaces :
-1.  Supprimer toute la logique liée à l'utilisation du tag MPD `Comment` pour stocker l'ID YouTube.
-2.  Supprimer toute la logique liée à l'utilisation des `stickers` MPD.
+#### 1.1. Enrichissement de la file d'attente
+- **Action** : Implémenter un système de cache dans le contexte (`Ctx`) pour les métadonnées YouTube.
+    - Ajouter un cache `youtube_library: HashMap<String, YouTubeVideo>` pour un accès rapide aux métadonnées par ID YouTube.
+    - Ajouter un cache `queue_youtube_ids: HashMap<u32, String>` pour lier les ID de chanson MPD aux ID YouTube.
+- **Action** : Initialiser ces caches au démarrage de l'application en lisant les données depuis le `DataStore`.
+- **Action** : Modifier la logique de rendu du panneau de la file d'attente (`QueuePane`). Pour chaque piste YouTube, elle utilisera les caches pour construire et afficher un objet `Song` temporaire enrichi avec les métadonnées correctes (titre, artiste, album, durée).
 
-## 2. Étapes d'implémentation
+#### 1.2. Standardisation de la modale "Song Info"
+- **Action** : Modifier la modale pour qu'elle affiche un ensemble de champs cohérent pour toutes les pistes.
+- **Champs à afficher** :
+    - `File`: Chemin local ou URL de streaming.
+    - `Filename`: Nom du fichier extrait.
+    - `Title`: Titre de la chanson.
+    - `Artist`: Artiste ou nom de la chaîne.
+    - `Duration`: Durée de la chanson.
+    - `Added`: Timestamp d'ajout à la file d'attente (fourni par MPD).
+    - `YouTube ID`: Identifiant permanent (uniquement pour les pistes YouTube).
 
-### Étape 1 : Nettoyage des implémentations précédentes
+## Goal 2: Gestion robuste de l'expiration des URLs YouTube
 
-Avant d'écrire du nouveau code, il est crucial de supprimer l'ancien.
+### Problème
+Les URLs de streaming YouTube expirent, ce qui provoque des échecs de lecture si l'application reste ouverte longtemps.
 
-1.  **Supprimer la logique des "Stickers"** :
-    -   Dans `src/ui/mod.rs` : Annuler l'utilisation de `client.set_sticker(...)` lors de l'ajout d'une chanson.
-    -   Dans `src/mpd/mpd_client.rs` : Annuler la modification de `playlist_id` qui récupérait les stickers.
-    -   Dans `src/ui/modals/info_list_modal.rs` : Supprimer la logique qui lit `song.stickers`.
+### Solution
 
-2.  **Supprimer la logique du tag "Comment"** :
-    -   Dans `src/ui/modals/info_list_modal.rs` : S'assurer que toute logique de lecture du tag `Comment` pour l'ID YouTube est supprimée et que le filtre de tags est propre.
+#### 2.1. Gestion de l'expiration au moment de la lecture (Runtime)
+- **Principe** : Abandonner la vérification au démarrage au profit d'une gestion "lazy" et plus performante.
+- **Action** : Implémenter la logique suivante lorsqu'un utilisateur lance la lecture d'une piste YouTube :
+    1.  Tenter de jouer la piste. Si MPD retourne une erreur indiquant que la ressource n'est pas disponible, cela signifie que l'URL a probablement expiré.
+    2.  Si la lecture échoue, l'application doit automatiquement et de manière transparente :
+        -   Récupérer l'ID YouTube permanent de la piste depuis le `DataStore`.
+        -   Demander une nouvelle URL de streaming.
+        -   Remplacer l'ancienne chanson dans la file d'attente MPD par une nouvelle avec la nouvelle URL, en utilisant `deleteid` et `addid` pour préserver **exactement la même position**.
+        -   Relancer la lecture.
 
-### Étape 2 : Création du module `DataStore`
+## Goal 3: Amélioration du feedback utilisateur et des logs
 
-Cette étape consiste à construire le cœur du nouveau système.
+### Problème
+L'utilisateur n'est pas informé des actions automatiques de l'application, comme le rafraîchissement des URLs.
 
-1.  **Ajouter la dépendance** :
-    -   Ajouter `rusqlite` au `Cargo.toml` pour l'interaction avec la base de données SQLite.
+### Solution
 
-2.  **Créer le nouveau module** :
-    -   Créer un nouveau fichier : `src/core/data_store.rs`.
+#### 3.1. Messages de log clairs
+- **Action** : Ajouter des logs détaillés pour tracer le cycle de vie du rafraîchissement des URLs :
+    -   Lorsqu'une URL expirée est détectée (échec de lecture).
+    -   Lorsqu'une nouvelle URL est demandée et obtenue.
+    -   Lors du remplacement de la chanson dans la file d'attente MPD.
 
-3.  **Définir la structure de la base de données** :
-    -   Le module initialisera une base de données SQLite unique (par ex. `~/.config/rmpc/rmpc.db`).
-    -   Il créera les tables suivantes si elles n'existent pas :
-      ```sql
-      -- Pour les métadonnées des pistes dans la file d'attente MPD
-      CREATE TABLE IF NOT EXISTS queue_youtube_metadata (
-          song_id     INTEGER PRIMARY KEY, -- ID de la chanson dans la file d'attente MPD
-          youtube_id  TEXT NOT NULL
-      );
-
-      -- Pour la bibliothèque de vidéos YouTube (remplace youtube_library.json)
-      -- Ne stocke que les métadonnées permanentes.
-      CREATE TABLE IF NOT EXISTS videos (
-          youtube_id      TEXT PRIMARY KEY NOT NULL,
-          title           TEXT NOT NULL,
-          channel         TEXT NOT NULL,
-          album           TEXT, -- L'album peut être optionnel
-          duration_secs   INTEGER NOT NULL,
-          thumbnail_url   TEXT -- L'URL de la miniature peut être stockée si elle est stable
-      );
-
-      -- Pour définir les playlists (remplace la structure de dossiers yt-playlists/)
-      -- Conçue pour contenir à la fois des pistes locales et YouTube.
-      CREATE TABLE IF NOT EXISTS playlists (
-          id      INTEGER PRIMARY KEY AUTOINCREMENT,
-          name    TEXT NOT NULL UNIQUE
-      );
-
-      -- Pour lier les pistes (locales ou YouTube) aux playlists
-      CREATE TABLE IF NOT EXISTS playlist_items (
-          playlist_id         INTEGER NOT NULL,
-          position            INTEGER NOT NULL, -- Position dans la playlist
-          video_youtube_id    TEXT, -- Pour les pistes YouTube, NULL pour les locales
-          file_path           TEXT, -- Pour les pistes locales, NULL pour les YouTube
-          PRIMARY KEY (playlist_id, position),
-          FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-          FOREIGN KEY (video_youtube_id) REFERENCES videos(youtube_id) ON DELETE CASCADE,
-          CHECK (video_youtube_id IS NOT NULL OR file_path IS NOT NULL) -- S'assure qu'au moins un type de piste est défini
-      );
-      ```
-
-4.  **Implémenter un mécanisme de migration de schéma** :
-    -   Au démarrage, le `DataStore` vérifiera la `PRAGMA user_version` de la base de données.
-    -   Si la version est obsolète, des scripts SQL de migration seront appliqués séquentiellement pour mettre à jour le schéma à la dernière version. Cela garantit que les futures modifications de la structure de la base de données ne corrompront pas les données des utilisateurs.
-
-5.  **Implémenter l'API du `DataStore`** :
-    -   Créer une `struct DataStore` qui contiendra la connexion à la base de données.
-    -   Définir un type d'erreur personnalisé (`enum DataStoreError`) pour fournir un retour d'information plus précis que les erreurs `rusqlite` génériques (par ex. `PlaylistNotFound`, `DatabaseError`). Toutes les méthodes de l'API retourneront `Result<..., DataStoreError>`.
-    -   Implémenter une API complète pour gérer à la fois la file d'attente et la bibliothèque/playlists. L'API privilégiera l'utilisation d'IDs uniques (clés primaires) plutôt que de noms pour une plus grande robustesse.
-      ```rust
-      // --- Méthodes générales ---
-      pub fn new() -> Result<Self, DataStoreError>; // Ouvre/crée la DB et applique les migrations
-
-      // --- Métadonnées de la file d'attente ---
-      pub fn add_youtube_song_to_queue(&self, song_id: u32, youtube_id: &str) -> Result<(), DataStoreError>;
-      pub fn get_youtube_id_for_song(&self, song_id: u32) -> Result<Option<String>, DataStoreError>;
-      pub fn remove_songs_from_queue(&self, song_ids: &[u32]) -> Result<(), DataStoreError>;
-      pub fn clear_queue(&self) -> Result<(), DataStoreError>;
-
-      // --- Gestion de la bibliothèque (Vidéos) ---
-      pub fn add_video_to_library(&self, video: &YouTubeVideo) -> Result<(), DataStoreError>;
-      pub fn remove_video_from_library(&self, youtube_id: &str) -> Result<(), DataStoreError>;
-      pub fn get_all_library_videos(&self) -> Result<Vec<YouTubeVideo>, DataStoreError>;
-      // ... autres méthodes CRUD pour les vidéos si nécessaire ...
-
-      // --- Gestion des Playlists ---
-      pub fn create_playlist(&self, name: &str) -> Result<i64, DataStoreError>; // Retourne le nouvel ID de la playlist
-      pub fn delete_playlist(&self, playlist_id: i64) -> Result<(), DataStoreError>;
-      pub fn rename_playlist(&self, playlist_id: i64, new_name: &str) -> Result<(), DataStoreError>;
-      pub fn get_all_playlists(&self) -> Result<Vec<Playlist>, DataStoreError>; // Playlist doit contenir son id
-
-      // --- Gestion du contenu des Playlists ---
-      pub fn add_youtube_video_to_playlist(&self, playlist_id: i64, youtube_id: &str) -> Result<(), DataStoreError>;
-      pub fn add_local_file_to_playlist(&self, playlist_id: i64, file_path: &str) -> Result<(), DataStoreError>;
-      pub fn remove_item_from_playlist(&self, playlist_id: i64, position: usize) -> Result<(), DataStoreError>;
-      // ... autres méthodes de manipulation de playlist ...
-      ```
-
-### Étape 3 : Intégration du `DataStore` dans l'application
-
-1.  **Initialisation** :
-    -   Instancier le `DataStore` au démarrage de l'application (probablement dans `src/core/app.rs`) et le rendre accessible via le contexte global `Ctx`.
-
-2.  **Remplacement de `youtube::storage`** :
-    -   Modifier toute la logique qui utilise actuellement `youtube::storage` pour lire/écrire dans les fichiers JSON.
-    -   Les panneaux de l'interface utilisateur (comme `youtube_library` et `youtube_playlists`) devront être adaptés pour appeler les nouvelles méthodes du `DataStore` via `ctx`.
-    -   Mettre à jour la logique des commandes `importlibrary` et `importplaylists` (dans `src/ui/mod.rs`) pour qu'elles insèrent les données lues depuis les fichiers CSV directement dans la base de données SQLite en utilisant le `DataStore`, au lieu d'écrire dans des fichiers JSON.
-
-3.  **Écriture des métadonnées de la file d'attente** :
-    -   Dans `src/ui/mod.rs`, dans la fonction `on_youtube_stream_url_ready`, après avoir obtenu le `song_id` de la part de MPD, appeler `ctx.data_store.add_youtube_song_to_queue(song_id, video.id)`.
-
-4.  **Lecture des métadonnées de la file d'attente** :
-    -   Dans `src/ui/modals/info_list_modal.rs`, modifier l'implémentation de `From<&Song>` pour qu'elle puisse accéder au `DataStore` (probablement via `Ctx`).
-    -   Appeler `data_store.get_youtube_id_for_song(song.id)` pour récupérer l'ID YouTube.
-    -   Afficher l'ID s'il est trouvé.
-
-### Étape 4 : Synchronisation avec la file d'attente MPD
-
-C'est l'étape la plus critique pour garantir la cohérence des données.
-
-1.  **Écouter les changements de la file d'attente** :
-    -   La boucle `idle` de MPD (probablement dans `src/core/client.rs`) doit écouter le sous-système `queue`.
-
-2.  **Gérer les mises à jour** :
-    -   Lorsque l'événement `queue` est reçu, re-synchroniser l'état.
-    -   La stratégie la plus simple et la plus robuste est :
-        1.  Récupérer la liste complète des `song_id` de la file d'attente MPD.
-        2.  Récupérer la liste complète des `song_id` de la table `youtube_metadata`.
-        3.  Calculer la différence : les `song_id` qui sont dans la base de données mais plus dans la file d'attente doivent être supprimés.
-        4.  Appeler `data_store.remove_songs_from_queue(...)` avec les IDs à supprimer.
-    -   Une optimisation sera de gérer les événements de suppression de manière plus ciblée si le protocole le permet facilement.
-
-### Étape 5 : Implémentation de la logique anti-doublons
-
-L'objectif est d'empêcher l'ajout de morceaux déjà présents dans la file d'attente, que ce soit des pistes locales ou YouTube.
-
-1.  **Mise à jour du `DataStore`** :
-    -   Ajouter une nouvelle méthode pour récupérer tous les IDs YouTube actuellement dans la file d'attente :
-      ```rust
-      // Récupère l'ensemble de tous les IDs YouTube dans la file d'attente
-      pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>, DataStoreError>;
-      ```
-
-2.  **Logique pour les pistes YouTube** :
-    -   La logique d'ajout de vidéos YouTube (par exemple, dans `src/ui/panes/youtube.rs` avant d'envoyer la `WorkRequest`) devra être modifiée :
-        -   Appeler `ctx.data_store.get_all_queue_youtube_ids()` pour obtenir les IDs existants.
-        -   Vérifier si l'ID de la vidéo à ajouter est déjà dans cet ensemble.
-        -   Si c'est le cas, afficher une notification à l'utilisateur (par exemple via `status_warn!`) et annuler l'ajout.
-
-3.  **Logique pour les pistes locales** :
-    -   La logique d'ajout de fichiers locaux (probablement dans les panneaux `Browser` ou `Playlists`) doit être modifiée.
-    -   Avant d'envoyer la commande `add` à MPD, il faudra :
-        -   Utiliser la file d'attente mise en cache (`ctx.queue`).
-        -   Itérer sur les chansons de la file d'attente et vérifier si le chemin du fichier (`song.file`) du morceau à ajouter est déjà présent.
-        -   Si c'est le cas, afficher une notification et annuler l'ajout.
+#### 3.2. Mises à jour de la barre de statut
+- **Action** : Fournir un retour visuel discret à l'utilisateur.
+    -   Afficher un message dans la barre de statut lorsque le rafraîchissement est en cours (par exemple : "Refreshing stream for 'Titre de la chanson'...").
