@@ -705,13 +705,20 @@ impl<'ui> Ui<'ui> {
 
     pub fn on_youtube_video_info_fetched(&mut self, video: YouTubeVideo, ctx: &mut Ctx) -> Result<()> {
         ctx.data_store.add_video_to_library(&video)?;
+        ctx.youtube_library.insert(video.youtube_id.clone(), video.clone());
         self.sync_videos_to_playlists_pane(&[video.clone()], ctx)?;
 
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
             p.add_video(video);
-            if self.pending_youtube_imports > 0 {
-                self.pending_youtube_imports -= 1;
-                if self.pending_youtube_imports == 0 {
+        }
+
+        if self.pending_youtube_imports > 0 {
+            self.pending_youtube_imports -= 1;
+            if self.pending_youtube_imports == 0 {
+                if !self.pending_playlist_import.is_empty() {
+                    ctx.app_event_sender
+                        .send(AppEvent::UiEvent(UiAppEvent::FinalizePlaylistImport))?;
+                } else {
                     status_info!("YouTube library import complete.");
                 }
             }
