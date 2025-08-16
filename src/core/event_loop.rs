@@ -280,6 +280,12 @@ fn main_task<B: Backend + std::io::Write>(
                     }
                     WorkDone::YouTubeStreamRefreshFailed { video_title } => {
                         status_error!("Failed to refresh stream for '{}'.", video_title);
+                        if ctx.status.state == State::Play {
+                            ctx.command(|client| {
+                                client.next()?;
+                                Ok(())
+                            });
+                        }
                     }
                     WorkDone::LyricsIndexed { index } => {
                         ctx.lrc_index = index;
