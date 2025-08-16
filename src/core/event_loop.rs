@@ -265,6 +265,21 @@ fn main_task<B: Backend + std::io::Write>(
                             log::error!(error:? = err; "UI failed to handle youtube video info fetched event");
                         }
                     }
+                    WorkDone::YouTubeStreamRefreshed {
+                        new_url,
+                        video,
+                        old_song_id,
+                        position,
+                    } => {
+                        if let Err(err) =
+                            ui.on_youtube_stream_refreshed(new_url, video, old_song_id, position, &mut ctx)
+                        {
+                            log::error!(error:? = err; "UI failed to handle youtube stream refreshed event");
+                        }
+                    }
+                    WorkDone::YouTubeStreamRefreshFailed { video_title } => {
+                        status_error!("Failed to refresh stream for '{}'.", video_title);
+                    }
                     WorkDone::LyricsIndexed { index } => {
                         ctx.lrc_index = index;
                         if let Err(err) = ui.on_event(UiEvent::LyricsIndexed, &mut ctx) {
