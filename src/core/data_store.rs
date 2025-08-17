@@ -1,5 +1,6 @@
 pub mod models;
 
+use crate::mpd::commands::Song;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -229,6 +230,31 @@ impl DataStore {
             result.insert(song_id, youtube_id);
         }
         Ok(result)
+    }
+
+    /// Synchronizes the `queue_youtube_metadata` table with the current state of the MPD queue.
+    ///
+    /// This method performs an "INSERT OR IGNORE" to avoid overwriting existing entries,
+    /// preserving their `updated_at` timestamps.
+    pub fn sync_queue_from_mpd(&self, songs: &[Song]) -> Result<(), DataStoreError> {
+        let mut conn = self.conn.borrow_mut();
+        let tx = conn.transaction()?;
+
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR IGNORE INTO queue_youtube_metadata (song_id, youtube_id) VALUES (?1, ?2)",
+            )?;
+            for song in songs {
+                if let Some(comment) = song.metadata.get("Comment") {
+                    if let Some(yt_id) = comment.first().strip_prefix("rmpc_yt_id=") {
+                        stmt.execute((song.id, yt_id))?;
+                    }
+                }
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
     }
 
     // --- Library Management ---

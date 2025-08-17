@@ -1500,6 +1500,7 @@ pub enum Tag {
     Title,
     File,
     Genre,
+    Comment,
     Custom(String),
 }
 
@@ -1513,6 +1514,7 @@ impl Tag {
             Tag::Title => "Title",
             Tag::File => "File",
             Tag::Genre => "Genre",
+            Tag::Comment => "Comment",
             Tag::Custom(v) => v,
         }
     }
@@ -1664,6 +1666,7 @@ mod filter_tests {
     #[test_case(Tag::Title, "Title")]
     #[test_case(Tag::File, "File")]
     #[test_case(Tag::Genre, "Genre")]
+    #[test_case(Tag::Comment, "Comment")]
     #[test_case(Tag::Custom("customtag".to_string()), "customtag")]
     fn single_value(tag: Tag, expected: &str) {
         let input: &[Filter<'_>] = &[Filter::new(tag, "mrs singer")];

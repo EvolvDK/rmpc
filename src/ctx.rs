@@ -92,6 +92,7 @@ impl Ctx {
 
         let status = client.get_status()?;
         let queue = client.playlist_info(sticker_support_needed)?.unwrap_or_default();
+        data_store.sync_queue_from_mpd(&queue)?;
         let youtube_library = data_store
             .get_all_library_videos()?
             .into_iter()

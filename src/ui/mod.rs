@@ -625,6 +625,12 @@ impl<'ui> Ui<'ui> {
                         .id
                         .context("MPD did not return an ID for the refreshed song")?;
 
+                    client.add_tag_id(
+                        song_id,
+                        Tag::Comment,
+                        &format!("rmpc_yt_id={}", video.youtube_id),
+                    )?;
+
                     if context.play_after_refresh {
                         client.play_id(song_id)?;
                     }
@@ -639,6 +645,11 @@ impl<'ui> Ui<'ui> {
                     .add_id(&url, None)?
                     .id
                     .context("MPD did not return an ID for the added song")?;
+                client.add_tag_id(
+                    song_id,
+                    Tag::Comment,
+                    &format!("rmpc_yt_id={}", video.youtube_id),
+                )?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
             status_info!("Added '{}' to queue", title);
@@ -667,6 +678,11 @@ impl<'ui> Ui<'ui> {
                     .add_id(&url, Some(QueuePosition::Absolute(position as usize)))?
                     .id
                     .context("MPD did not return an ID for the refreshed song")?;
+                client.add_tag_id(
+                    song_id,
+                    Tag::Comment,
+                    &format!("rmpc_yt_id={}", video.youtube_id),
+                )?;
                 client.play_id(song_id)?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
             });
