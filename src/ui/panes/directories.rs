@@ -360,7 +360,7 @@ impl BrowserPane<DirOrSong> for DirectoriesPane {
                                 .sorted_by(|a, b| {
                                     a.with_custom_sort(&sort).cmp(&b.with_custom_sort(&sort))
                                 })
-                                .flat_map(|v| Into::<Text>::into(v.to_list_item_simple(&config)).lines)
+                                .map(|v| v.to_line_simple(&config))
                                 .collect()
                         } else {
                             match client.lsinfo(Some(&next_path)) {
@@ -379,7 +379,7 @@ impl BrowserPane<DirOrSong> for DirectoriesPane {
                             .sorted_by(|a, b| {
                                 a.with_custom_sort(&sort).cmp(&b.with_custom_sort(&sort))
                             })
-                            .flat_map(|v| Into::<Text>::into(v.to_list_item_simple(&config)).lines)
+                            .map(|v| v.to_line_simple(&config))
                             .collect()
                         };
 

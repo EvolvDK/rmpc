@@ -344,8 +344,7 @@ impl BrowserPane<DirOrSong> for AlbumsPane {
                     .target(PaneType::Albums)
                     .query(move |client| {
                         let data = list_titles(client, &current, &sort_order)?
-                            .map(|v| v.to_list_item_simple(&config))
-                            .flat_map(|item| Into::<Text>::into(item).lines)
+                            .map(|v| v.to_line_simple(&config))
                             .collect_vec();
                         let data = PreviewGroup::from(None, None, data);
                         let data = Some(vec![data]);

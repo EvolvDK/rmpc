@@ -19,15 +19,15 @@ use crate::{config::Config, mpd::commands::Song};
 pub trait DirStackItem {
     fn as_path(&self) -> &str;
     fn matches(&self, config: &Config, filter: &str) -> bool;
-    fn to_list_item<'a>(
+    fn to_line<'a>(
         &self,
         config: &Config,
         is_marked: bool,
         matches_filter: bool,
         additional_content: Option<String>,
-    ) -> ListItem<'a>;
-    fn to_list_item_simple<'a>(&self, config: &Config) -> ListItem<'a> {
-        self.to_list_item(config, false, false, None)
+    ) -> Line<'a>;
+    fn to_line_simple<'a>(&self, config: &Config) -> Line<'a> {
+        self.to_line(config, false, false, None)
     }
 }
 
@@ -48,13 +48,13 @@ impl DirStackItem for DirOrSong {
         }
     }
 
-    fn to_list_item<'a>(
+    fn to_line<'a>(
         &self,
         config: &Config,
         is_marked: bool,
         matches_filter: bool,
         additional_content: Option<String>,
-    ) -> ListItem<'a> {
+    ) -> Line<'a> {
         let marker_span = if is_marked {
             Span::styled(config.theme.symbols.marker.clone(), config.theme.highlighted_item_style)
         } else {
@@ -109,9 +109,9 @@ impl DirStackItem for DirOrSong {
             value.push_span(Span::raw(content));
         }
         if matches_filter {
-            ListItem::from(value).style(config.theme.highlighted_item_style)
+            value.style(config.theme.highlighted_item_style)
         } else {
-            ListItem::from(value)
+            value
         }
     }
 }
@@ -125,13 +125,13 @@ impl DirStackItem for Song {
         self.matches(config.theme.browser_song_format.0.as_slice(), filter)
     }
 
-    fn to_list_item<'a>(
+    fn to_line<'a>(
         &self,
         config: &Config,
         is_marked: bool,
         matches_filter: bool,
         additional_content: Option<String>,
-    ) -> ListItem<'a> {
+    ) -> Line<'a> {
         let marker_span = if is_marked {
             Span::styled(config.theme.symbols.marker.clone(), config.theme.highlighted_item_style)
         } else {
@@ -150,12 +150,11 @@ impl DirStackItem for Song {
         if let Some(content) = additional_content {
             result.push(Span::raw(content));
         }
-        let mut result = ListItem::new(Line::from(result));
+        let mut line = Line::from(result);
         if matches_filter {
-            result = result.style(config.theme.highlighted_item_style);
+            line = line.style(config.theme.highlighted_item_style);
         }
-
-        result
+        line
     }
 }
 
@@ -212,24 +211,24 @@ impl DirStackItem for String {
         self.to_lowercase().contains(&filter.to_lowercase())
     }
 
-    fn to_list_item<'a>(
+    fn to_line<'a>(
         &self,
         config: &Config,
         is_marked: bool,
         matches_filter: bool,
         _additional_content: Option<String>,
-    ) -> ListItem<'a> {
+    ) -> Line<'a> {
         let marker_span = if is_marked {
             Span::styled(config.theme.symbols.marker.clone(), config.theme.highlighted_item_style)
         } else {
             Span::from(" ".repeat(config.theme.symbols.marker.chars().count()))
         };
 
+        let line = Line::from(vec![marker_span, Span::from(self.clone())]);
         if matches_filter {
-            ListItem::new(Line::from(vec![marker_span, Span::from(self.clone())]))
-                .style(config.theme.highlighted_item_style)
+            line.style(config.theme.highlighted_item_style)
         } else {
-            ListItem::new(Line::from(vec![marker_span, Span::from(self.clone())]))
+            line
         }
     }
 }
