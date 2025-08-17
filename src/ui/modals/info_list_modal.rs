@@ -83,7 +83,9 @@ impl KeyValues {
             });
             result.push(KeyValue {
                 key: "Updated".to_owned(),
-                value: updated_at.to_rfc2822(),
+                value: DateTime::<Local>::from(updated_at)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string(),
             });
         } else {
             // Standard fields for local files
@@ -111,7 +113,7 @@ impl KeyValues {
             let local_added: DateTime<Local> = added.into();
             result.push(KeyValue {
                 key: "Added".to_owned(),
-                value: local_added.to_rfc2822(),
+                value: local_added.format("%Y-%m-%d %H:%M:%S").to_string(),
             });
         }
 
