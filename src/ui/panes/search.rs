@@ -163,8 +163,8 @@ impl SearchPane {
             }
             b.padding(Padding::new(0, column_right_padding, 0, 0))
         };
-        let current = List::new(self.songs_dir.to_list_items(config))
-            .highlight_style(config.theme.current_item_style);
+        let items = self.songs_dir.to_lines(config).into_iter().map(ListItem::new).collect_vec();
+        let current = List::new(items).highlight_style(config.theme.current_item_style);
         let directory = &mut self.songs_dir;
 
         directory.state.set_content_and_viewport_len(directory.items.len(), area.height.into());
@@ -195,15 +195,8 @@ impl SearchPane {
         match &self.phase {
             Phase::SearchTextboxInput => {}
             Phase::Search => {
-                let data = Some(vec![PreviewGroup::from(
-                    None,
-                    None,
-                    self.songs_dir
-                        .to_list_items(&ctx.config)
-                        .into_iter()
-                        .flat_map(|item| Into::<Text>::into(item).lines)
-                        .collect(),
-                )]);
+                let data =
+                    Some(vec![PreviewGroup::from(None, None, self.songs_dir.to_lines(&ctx.config))]);
                 ctx.query().id(PREVIEW).replace_id("preview").target(PaneType::Search).query(
                     |_| Ok(MpdQueryResult::Preview { data, origin_path: Some(origin_path) }),
                 );
@@ -1184,15 +1177,8 @@ impl Pane for SearchPane {
             }
             (SEARCH, MpdQueryResult::SongsList { data, origin_path: _ }) => {
                 self.songs_dir = Dir::new(data);
-                self.preview = Some(vec![PreviewGroup::from(
-                    None,
-                    None,
-                    self.songs_dir
-                        .to_list_items(&ctx.config)
-                        .into_iter()
-                        .flat_map(|item| Into::<Text>::into(item).lines)
-                        .collect(),
-                )]);
+                self.preview =
+                    Some(vec![PreviewGroup::from(None, None, self.songs_dir.to_lines(&ctx.config))]);
                 ctx.render()?;
             }
             _ => {}
