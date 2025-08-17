@@ -7,7 +7,7 @@ use itertools::Itertools;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Styled, Stylize},
-    text::{Span, Text},
+    text::Span,
     widgets::{Block, Borders, List, ListItem, Padding},
 };
 

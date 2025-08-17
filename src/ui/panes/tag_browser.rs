@@ -2,7 +2,6 @@ use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use enum_map::EnumMap;
-use ratatui::text::Text;
 use itertools::Itertools;
 use ratatui::{Frame, prelude::Rect};
 

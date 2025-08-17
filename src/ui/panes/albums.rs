@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, anyhow};
 use enum_map::EnumMap;
-use ratatui::text::Text;
 use itertools::Itertools;
 use ratatui::{Frame, prelude::Rect};
 

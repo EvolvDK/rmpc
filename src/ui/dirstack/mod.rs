@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use itertools::Itertools;
 use ratatui::{
     text::{Line, Span},
-    widgets::{ListItem, ListState, TableState},
+    widgets::{ListState, TableState},
 };
 
 mod dir;

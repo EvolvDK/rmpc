@@ -71,8 +71,10 @@ where
         };
         let column_right_padding: u16 = config.theme.scrollbar.is_some().into();
 
-        let previous = state.previous().to_list_items(config);
-        let current = state.current().to_list_items(config);
+        let previous: Vec<ListItem> =
+            state.previous().to_lines(config).into_iter().map(ListItem::new).collect();
+        let current: Vec<ListItem> =
+            state.current().to_lines(config).into_iter().map(ListItem::new).collect();
         let preview = state.preview().cloned();
 
         let [previous_area, current_area, preview_area] = *Layout::horizontal([
