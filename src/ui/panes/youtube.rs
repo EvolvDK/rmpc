@@ -17,6 +17,7 @@ use crate::{
     config::keys::CommonAction,
     core::data_store::models::{PlaylistItem, YouTubeVideo},
     ctx::Ctx,
+    youtube::YtDlpVideoInfo,
     shared::{
         events::{AppEvent, WorkRequest},
         key_event::KeyEvent,
@@ -57,8 +58,8 @@ pub struct YouTubePane {
     // Search state
     search_generation: u64,
     search_input: Input,
-    raw_search_results: Vec<YouTubeVideo>,
-    filtered_search_results: Vec<(i64, YouTubeVideo, Vec<usize>)>,
+    raw_search_results: Vec<YtDlpVideoInfo>,
+    filtered_search_results: Vec<(i64, YtDlpVideoInfo, Vec<usize>)>,
     search_list_state: ListState,
     is_loading_search: bool,
     matcher: SkimMatcherV2,
@@ -114,9 +115,9 @@ impl YouTubePane {
     }
 
     // Search methods
-    pub fn on_search_result(&mut self, video: YouTubeVideo, generation: u64) {
+    pub fn on_search_result(&mut self, video_info: YtDlpVideoInfo, generation: u64) {
         if generation == self.search_generation {
-            self.raw_search_results.push(video);
+            self.raw_search_results.push(video_info);
             self.filter_search_results();
         }
     }
@@ -139,10 +140,10 @@ impl YouTubePane {
             self.filtered_search_results = self
                 .raw_search_results
                 .iter()
-                .filter_map(|video| {
+                .filter_map(|video_info| {
                     self.matcher
-                        .fuzzy_indices(&video.title, query)
-                        .map(|(score, indices)| (score, video.clone(), indices))
+                        .fuzzy_indices(&video_info.title, query)
+                        .map(|(score, indices)| (score, video_info.clone(), indices))
                 })
                 .sorted_by_key(|(score, _, _)| -*score)
                 .collect();
@@ -306,8 +307,9 @@ impl YouTubePane {
                 ),
                 CommonAction::Confirm => {
                     if let Some(index) = self.search_list_state.selected() {
-                        if let Some((_, video, _)) = self.filtered_search_results.get(index) {
-                            self.add_youtube_video_to_queue(video, ctx)?;
+                        if let Some((_, video_info, _)) = self.filtered_search_results.get(index) {
+                            let video: YouTubeVideo = video_info.clone().into();
+                            self.add_youtube_video_to_queue(&video, ctx)?;
                         }
                     }
                     event.stop_propagation();
@@ -473,7 +475,7 @@ impl YouTubePane {
     }
 
     fn render_search_result_item<'a>(
-        video: &'a YouTubeVideo,
+        video_info: &'a YtDlpVideoInfo,
         indices: &'a [usize],
         ctx: &'a Ctx,
     ) -> ListItem<'a> {
@@ -485,7 +487,7 @@ impl YouTubePane {
         let mut is_currently_highlighted = false;
 
         // Nous ne pouvons surligner que le titre, car les indices ne s'appliquent qu'à lui.
-        for (i, char) in video.title.char_indices() {
+        for (i, char) in video_info.title.char_indices() {
             let should_be_highlighted = highlighted_indices.contains(&i);
 
             if i == 0 {
@@ -506,7 +508,7 @@ impl YouTubePane {
         }
 
         // Ajouter le reste de la chaîne (artiste) sans style particulier.
-        spans.push(Span::raw(format!(" - {}", video.channel)));
+        spans.push(Span::raw(format!(" - {}", video_info.channel)));
 
         ListItem::new(Line::from(spans))
     }
@@ -563,7 +565,7 @@ impl Pane for YouTubePane {
         let search_items: Vec<ListItem> = self
             .filtered_search_results
             .iter()
-            .map(|(_, v, indices)| Self::render_search_result_item(v, indices, ctx))
+            .map(|(_, v_info, indices)| Self::render_search_result_item(v_info, indices, ctx))
             .collect();
         let search_list = List::new(search_items)
             .block(results_block)

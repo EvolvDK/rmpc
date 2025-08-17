@@ -21,6 +21,7 @@ use crate::{
     core::data_store::models::YouTubeVideo,
     mpd::commands::IdleEvent,
     ui::UiAppEvent,
+    youtube::YtDlpVideoInfo,
 };
 
 #[derive(Debug, Clone)]
@@ -74,7 +75,7 @@ pub(crate) enum WorkDone {
     LyricsIndexed { index: LrcIndex },
     SingleLrcIndexed { lrc_entry: Option<LrcIndexEntry> },
     YouTubeSearchResult {
-        video: YouTubeVideo,
+        video_info: YtDlpVideoInfo,
         generation: u64,
     },
     YouTubeSearchFinished {

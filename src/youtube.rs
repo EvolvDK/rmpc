@@ -16,21 +16,56 @@ use crate::{
 
 /// Représente les métadonnées brutes d'une vidéo YouTube, désérialisées depuis yt-dlp.
 #[derive(Debug, Deserialize, Clone)]
-struct YtDlpVideoInfo {
-    id: String,
-    title: String,
-    channel: String,
+pub(crate) struct YtDlpVideoInfo {
+    // Champs pour l'affichage brut
+    pub id: String,
+    pub title: String,
+    pub channel: String,
+    pub duration: f64,
+    pub thumbnail: Option<String>,
+
+    // Champs pour le mappage prioritaire
+    track: Option<String>,
+    artist: Option<String>,
+    artists: Option<Vec<String>>,
     album: Option<String>,
-    duration: f64,
-    thumbnail: Option<String>,
+    album_artist: Option<String>,
+    album_artists: Option<Vec<String>>,
+    creator: Option<String>,
+    creators: Option<Vec<String>>,
+    uploader: Option<String>,
+    uploader_id: Option<String>,
+    fulltitle: Option<String>,
+    alt_title: Option<String>,
+    display_id: Option<String>,
 }
 
 impl From<YtDlpVideoInfo> for YouTubeVideo {
     fn from(info: YtDlpVideoInfo) -> Self {
+        let title = info
+            .track
+            .or(info.title.clone().into())
+            .or(info.fulltitle)
+            .or(info.alt_title)
+            .or(info.display_id)
+            .unwrap_or_default();
+
+        let artist = info
+            .artist
+            .or_else(|| info.artists.map(|a| a.join(", ")))
+            .or(info.album_artist)
+            .or_else(|| info.album_artists.map(|a| a.join(", ")))
+            .or(info.creator)
+            .or_else(|| info.creators.map(|c| c.join(", ")))
+            .or(info.uploader)
+            .or(info.channel.clone().into())
+            .or(info.uploader_id)
+            .unwrap_or_default();
+
         Self {
             youtube_id: info.id,
-            title: info.title,
-            channel: info.channel,
+            title,
+            channel: artist,
             album: info.album,
             duration_secs: info.duration as u32,
             thumbnail_url: info.thumbnail,
@@ -119,7 +154,7 @@ pub async fn search(
                 results_for_cache.push(video_info.clone());
             }
             event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult {
-                video: video_info.into(),
+                video_info,
                 generation,
             })))?;
         }
