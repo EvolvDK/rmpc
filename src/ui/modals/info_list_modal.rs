@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{DateTime, Local};
 use bon::bon;
 use itertools::Itertools;
 use ratatui::{
@@ -107,9 +108,10 @@ impl KeyValues {
         }
 
         if let Some(added) = song.added {
+            let local_added: DateTime<Local> = added.into();
             result.push(KeyValue {
                 key: "Added".to_owned(),
-                value: added.to_rfc2822(),
+                value: local_added.format("%Y-%m-%d %H:%M:%S").to_string(),
             });
         }
 
