@@ -21,7 +21,7 @@ use ratatui::{
     layout::Layout,
     prelude::Rect,
     text::{Line, Span},
-    widgets::{Block, List, ListItem},
+    widgets::{Block, ListItem, Paragraph, Wrap},
     Frame,
 };
 use rmpc_playlists::RmpcPlaylistsPane;
@@ -71,22 +71,20 @@ pub(crate) fn render_preview_data(
     data: &[PreviewGroup],
     block: Block,
 ) {
-    let items: Vec<ListItem> = data
+    let lines: Vec<Line> = data
         .iter()
         .flat_map(|group| {
-            let mut group_items = Vec::new();
+            let mut group_lines = Vec::new();
             if let Some(name) = group.name {
-                group_items.push(
-                    ListItem::new(Line::from(name).style(group.header_style.unwrap_or_default())),
-                );
+                group_lines.push(Line::from(name).style(group.header_style.unwrap_or_default()));
             }
-            group_items.extend(group.items.clone());
-            group_items
+            group_lines.extend(group.items.iter().flat_map(|item| item.content.lines.clone()));
+            group_lines
         })
         .collect();
 
-    let list = List::new(items).block(block);
-    frame.render_widget(list, area);
+    let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
 }
 
 pub mod album_art;

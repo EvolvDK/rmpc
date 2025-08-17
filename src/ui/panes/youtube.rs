@@ -13,6 +13,8 @@ use ratatui::{
 };
 use tui_input::{backend::crossterm::EventHandler, Input};
 
+use std::time::Duration;
+
 use crate::{
     config::keys::CommonAction,
     core::data_store::models::{PlaylistItem, YouTubeVideo},
@@ -30,6 +32,8 @@ use crate::{
         UiAppEvent,
     },
 };
+
+const CLEAR_STATUS_JOB_ID: &str = "clear_status_youtube_pane";
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Focus {
@@ -231,6 +235,21 @@ impl YouTubePane {
         if let Some(video) = self.get_selected_video() {
             self.add_youtube_video_to_queue(video, ctx)?;
         }
+
+        if old_selection != self.video_list_state.selected() {
+            if let Some(video) = self.get_selected_video() {
+                status_info!("Selected: {} - {}", video.title, video.channel);
+                ctx.scheduler.schedule_replace(
+                    CLEAR_STATUS_JOB_ID.into(),
+                    Duration::from_secs(3),
+                    |(event_tx, _)| {
+                        event_tx.send(AppEvent::UiEvent(UiAppEvent::ClearStatusMessage))?;
+                        Ok(())
+                    },
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -293,6 +312,8 @@ impl YouTubePane {
     }
 
     fn handle_search_results_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
+        let old_selection = self.search_list_state.selected();
+
         if let Some(action) = event.as_common_action(ctx) {
             match action {
                 CommonAction::Down => Self::move_selection(
@@ -324,6 +345,23 @@ impl YouTubePane {
             KeyCode::Right => self.focus = Focus::LibraryChannels,
             _ => {}
         }
+
+        if old_selection != self.search_list_state.selected() {
+            if let Some(index) = self.search_list_state.selected() {
+                if let Some((_, video_info, _)) = self.filtered_search_results.get(index) {
+                    status_info!("Selected: {} - {}", video_info.title, video_info.channel);
+                    ctx.scheduler.schedule_replace(
+                        CLEAR_STATUS_JOB_ID.into(),
+                        Duration::from_secs(3),
+                        |(event_tx, _)| {
+                            event_tx.send(AppEvent::UiEvent(UiAppEvent::ClearStatusMessage))?;
+                            Ok(())
+                        },
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -389,6 +427,8 @@ impl YouTubePane {
     }
 
     fn handle_library_videos_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
+        let old_selection = self.video_list_state.selected();
+
         match self.library_video_focus {
             LibraryVideoFocus::List => {
                 if let Some(action) = event.as_common_action(ctx) {

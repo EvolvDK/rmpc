@@ -1163,6 +1163,9 @@ impl<'ui> Ui<'ui> {
             UiAppEvent::FinalizePlaylistImport => {
                 self.on_finalize_playlist_import(ctx)?;
             }
+            UiAppEvent::ClearStatusMessage => {
+                status_info!("");
+            }
         }
         Ok(())
     }
@@ -1414,6 +1417,7 @@ pub enum UiAppEvent {
         path: PathBuf,
     },
     FinalizePlaylistImport,
+    ClearStatusMessage,
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
