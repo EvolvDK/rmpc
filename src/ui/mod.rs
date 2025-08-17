@@ -588,12 +588,12 @@ impl<'ui> Ui<'ui> {
 
     pub fn on_youtube_search_result(
         &mut self,
-        video: YouTubeVideo,
+        video_info: crate::youtube::YtDlpVideoInfo,
         generation: u64,
         ctx: &mut Ctx,
     ) -> Result<()> {
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.on_search_result(video, generation);
+            p.on_search_result(video_info, generation);
         }
         Ok(ctx.render()?)
     }
