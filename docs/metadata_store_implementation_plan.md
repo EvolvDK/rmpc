@@ -85,3 +85,21 @@ L'utilisateur n'est pas informé des actions automatiques de l'application, comm
 #### 3.2. Mises à jour de la barre de statut
 - **Action** : Fournir un retour visuel discret à l'utilisateur.
     -   Afficher un message dans la barre de statut lorsque le rafraîchissement est en cours (par exemple : "Refreshing stream for 'Titre de la chanson'...").
+
+## Goal 4: Persistance et synchronisation de la file d'attente au redémarrage
+
+### Problème
+Après un redémarrage du système, les métadonnées des pistes YouTube dans la file d'attente sont perdues car la base de données `rmpc.db` n'est pas synchronisée avec l'état de la file d'attente de MPD. Cela empêche l'affichage correct des métadonnées et le fonctionnement du rafraîchissement des URLs.
+
+### Solution
+- **Principe**: MPD reste la source de vérité pour la file d'attente. Nous utiliserons les tags MPD pour marquer les pistes YouTube de manière persistante.
+- **Action 1: Marquage à l'ajout**:
+    -   Lorsqu'une chanson YouTube est ajoutée à la file d'attente, en plus de la commande `addid`, envoyer une commande `addtagid` pour attacher un tag `Comment` à la chanson.
+    -   Le tag aura un format standardisé, par exemple : `rmpc_yt_id=VIDEO_ID`.
+- **Action 2: Synchronisation au démarrage**:
+    -   Au lancement de l'application, avant d'initialiser les caches, implémenter une routine de synchronisation unique.
+    -   Cette routine lira l'intégralité de la file d'attente de MPD.
+    -   Pour chaque chanson, elle vérifiera la présence du tag `Comment` au format `rmpc_yt_id=...`.
+    -   Si un tag est trouvé, elle utilisera l'ID de la chanson MPD et l'ID YouTube pour peupler (insérer ou ignorer si existant) la table `queue_youtube_metadata` de la base de données `rmpc.db`.
+- **Action 3: Mise à jour de l'API `DataStore`**:
+    -   Créer une nouvelle méthode `sync_queue_from_mpd(&self, songs: &[Song])` qui effectuera cette synchronisation en une seule transaction pour des raisons de performance.
