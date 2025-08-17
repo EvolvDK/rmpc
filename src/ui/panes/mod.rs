@@ -21,7 +21,7 @@ use ratatui::{
     layout::Layout,
     prelude::Rect,
     text::{Line, Span},
-    widgets::{Block, ListItem, Paragraph, Wrap},
+    widgets::{Block, Paragraph, Wrap},
     Frame,
 };
 use rmpc_playlists::RmpcPlaylistsPane;
@@ -78,7 +78,7 @@ pub(crate) fn render_preview_data(
             if let Some(name) = group.name {
                 group_lines.push(Line::from(name).style(group.header_style.unwrap_or_default()));
             }
-            group_lines.extend(group.items.iter().flat_map(|item| item.content.lines.clone()));
+            group_lines.extend(group.items.clone());
             group_lines
         })
         .collect();
@@ -349,93 +349,72 @@ pub(crate) mod browser {
                 separator.clone(),
                 Span::from(self.file.clone()),
             ]);
-            info_group.push(file.into());
+            info_group.push(file);
 
             if let Some(file_name) = self.file_name() {
-                info_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled("Filename", key_style),
-                        separator.clone(),
-                        Span::from(file_name.into_owned()),
-                    ])
-                    .into(),
-                );
+                info_group.push(Line::from(vec![
+                    start_of_line_spacer.clone(),
+                    Span::styled("Filename", key_style),
+                    separator.clone(),
+                    Span::from(file_name.into_owned()),
+                ]));
             }
 
             if let Some(title) = self.metadata.get("title") {
                 title.for_each(|item| {
-                    info_group.push(
-                        Line::from(vec![
-                            start_of_line_spacer.clone(),
-                            Span::styled("Title", key_style),
-                            separator.clone(),
-                            Span::from(item.to_owned()),
-                        ])
-                        .into(),
-                    );
+                    info_group.push(Line::from(vec![
+                        start_of_line_spacer.clone(),
+                        Span::styled("Title", key_style),
+                        separator.clone(),
+                        Span::from(item.to_owned()),
+                    ]));
                 });
             }
             if let Some(artist) = self.metadata.get("artist") {
                 artist.for_each(|item| {
-                    info_group.push(
-                        Line::from(vec![
-                            start_of_line_spacer.clone(),
-                            Span::styled("Artist", key_style),
-                            separator.clone(),
-                            Span::from(item.to_owned()),
-                        ])
-                        .into(),
-                    );
+                    info_group.push(Line::from(vec![
+                        start_of_line_spacer.clone(),
+                        Span::styled("Artist", key_style),
+                        separator.clone(),
+                        Span::from(item.to_owned()),
+                    ]));
                 });
             }
 
             if let Some(album) = self.metadata.get("album") {
                 album.for_each(|item| {
-                    info_group.push(
-                        Line::from(vec![
-                            start_of_line_spacer.clone(),
-                            Span::styled("Album", key_style),
-                            separator.clone(),
-                            Span::from(item.to_owned()),
-                        ])
-                        .into(),
-                    );
+                    info_group.push(Line::from(vec![
+                        start_of_line_spacer.clone(),
+                        Span::styled("Album", key_style),
+                        separator.clone(),
+                        Span::from(item.to_owned()),
+                    ]));
                 });
             }
 
             if let Some(duration) = &self.duration {
-                info_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled("Duration", key_style),
-                        separator.clone(),
-                        Span::from(duration.as_secs().to_string()),
-                    ])
-                    .into(),
-                );
+                info_group.push(Line::from(vec![
+                    start_of_line_spacer.clone(),
+                    Span::styled("Duration", key_style),
+                    separator.clone(),
+                    Span::from(duration.as_secs().to_string()),
+                ]));
             }
 
-            info_group.push(
-                Line::from(vec![
-                    start_of_line_spacer.clone(),
-                    Span::styled("Last Modified", key_style),
-                    separator.clone(),
-                    Span::from(self.last_modified.to_string()),
-                ])
-                .into(),
-            );
+            info_group.push(Line::from(vec![
+                start_of_line_spacer.clone(),
+                Span::styled("Last Modified", key_style),
+                separator.clone(),
+                Span::from(self.last_modified.to_string()),
+            ]));
 
             if let Some(added) = &self.added {
-                info_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled("Added", key_style),
-                        separator.clone(),
-                        Span::from(added.to_string()),
-                    ])
-                    .into(),
-                );
+                info_group.push(Line::from(vec![
+                    start_of_line_spacer.clone(),
+                    Span::styled("Added", key_style),
+                    separator.clone(),
+                    Span::from(added.to_string()),
+                ]));
             }
 
             let mut tags_group = PreviewGroup::new(Some(" --- [Tags]"), Some(group_style));
@@ -448,15 +427,12 @@ pub(crate) mod browser {
                 .sorted_by_key(|(key, _)| *key)
             {
                 v.for_each(|item| {
-                    tags_group.push(
-                        Line::from(vec![
-                            start_of_line_spacer.clone(),
-                            Span::styled(k.clone(), key_style),
-                            separator.clone(),
-                            Span::from(item.to_owned()),
-                        ])
-                        .into(),
-                    );
+                    tags_group.push(Line::from(vec![
+                        start_of_line_spacer.clone(),
+                        Span::styled(k.clone(), key_style),
+                        separator.clone(),
+                        Span::from(item.to_owned()),
+                    ]));
                 });
             }
 

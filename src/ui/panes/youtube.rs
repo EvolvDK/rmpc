@@ -15,9 +15,12 @@ use tui_input::{backend::crossterm::EventHandler, Input};
 
 use std::time::Duration;
 
+use once_cell::sync::Lazy;
+
 use crate::{
     config::keys::CommonAction,
     core::data_store::models::{PlaylistItem, YouTubeVideo},
+    shared::id,
     ctx::Ctx,
     youtube::YtDlpVideoInfo,
     shared::{
@@ -33,7 +36,7 @@ use crate::{
     },
 };
 
-const CLEAR_STATUS_JOB_ID: &str = "clear_status_youtube_pane";
+static CLEAR_STATUS_JOB_ID: Lazy<id::Id> = Lazy::new(id::new);
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum Focus {
@@ -235,21 +238,6 @@ impl YouTubePane {
         if let Some(video) = self.get_selected_video() {
             self.add_youtube_video_to_queue(video, ctx)?;
         }
-
-        if old_selection != self.video_list_state.selected() {
-            if let Some(video) = self.get_selected_video() {
-                status_info!("Selected: {} - {}", video.title, video.channel);
-                ctx.scheduler.schedule_replace(
-                    CLEAR_STATUS_JOB_ID.into(),
-                    Duration::from_secs(3),
-                    |(event_tx, _)| {
-                        event_tx.send(AppEvent::UiEvent(UiAppEvent::ClearStatusMessage))?;
-                        Ok(())
-                    },
-                );
-            }
-        }
-
         Ok(())
     }
 
@@ -351,7 +339,7 @@ impl YouTubePane {
                 if let Some((_, video_info, _)) = self.filtered_search_results.get(index) {
                     status_info!("Selected: {} - {}", video_info.title, video_info.channel);
                     ctx.scheduler.schedule_replace(
-                        CLEAR_STATUS_JOB_ID.into(),
+                        *CLEAR_STATUS_JOB_ID,
                         Duration::from_secs(3),
                         |(event_tx, _)| {
                             event_tx.send(AppEvent::UiEvent(UiAppEvent::ClearStatusMessage))?;
