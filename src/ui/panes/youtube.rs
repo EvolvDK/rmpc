@@ -287,12 +287,13 @@ impl YouTubePane {
                     self.focus = Focus::SearchResults;
                 }
             }
-            KeyCode::Right => self.focus = Focus::LibraryChannels,
             _ => {
                 if self.search_input.handle_event(&Event::Key(event.inner())).is_some() {
                     self.filter_search_results();
                     event.stop_propagation();
                     ctx.render()?;
+                } else if let KeyCode::Right = event.code() {
+                    self.focus = Focus::LibraryChannels;
                 }
             }
         }
@@ -300,6 +301,11 @@ impl YouTubePane {
     }
 
     fn handle_search_results_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
+        if event.code() == KeyCode::Up && self.search_list_state.selected().is_some_and(|i| i == 0) {
+            self.focus = Focus::SearchInput;
+            return Ok(());
+        }
+
         let old_selection = self.search_list_state.selected();
 
         if let Some(action) = event.as_common_action(ctx) {
@@ -326,13 +332,6 @@ impl YouTubePane {
                 _ => {}
             }
         }
-        match event.code() {
-            KeyCode::Up if self.search_list_state.selected().is_some_and(|i| i == 0) => {
-                self.focus = Focus::SearchInput;
-            }
-            KeyCode::Right => self.focus = Focus::LibraryChannels,
-            _ => {}
-        }
 
         if old_selection != self.search_list_state.selected() {
             if let Some(index) = self.search_list_state.selected() {
@@ -348,6 +347,8 @@ impl YouTubePane {
                     );
                 }
             }
+        } else if let KeyCode::Right = event.code() {
+            self.focus = Focus::LibraryChannels;
         }
 
         Ok(())
@@ -619,10 +620,10 @@ impl Pane for YouTubePane {
             &mut self.search_list_state,
         );
 
-        // --- Column 2: Library Channels / Videos ---
+        // --- Column 2: Library Artists / Tracks ---
         let channels_block = Block::default()
             .borders(Borders::ALL)
-            .title("Library: Channels")
+            .title("Library: Artists")
             .border_style(if self.focus == Focus::LibraryChannels {
                 ctx.config.as_focused_border_style()
             } else {
@@ -650,7 +651,7 @@ impl Pane for YouTubePane {
             LibraryVideoFocus::List => {
                 let videos_block = Block::default()
                     .borders(Borders::ALL)
-                    .title("Library: Videos")
+                    .title("Library: Tracks")
                     .border_style(if self.focus == Focus::LibraryVideos {
                         ctx.config.as_focused_border_style()
                     } else {
