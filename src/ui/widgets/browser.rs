@@ -96,7 +96,7 @@ where
                     }
                     result.push(item);
                 }
-                result.extend(group.items);
+                result.extend(group.items.into_iter().map(ListItem::new));
                 result.push(ListItem::new(Span::raw("")));
             }
 

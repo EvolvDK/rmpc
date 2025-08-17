@@ -1095,10 +1095,12 @@ impl Pane for SearchPane {
                             result.push(ListItem::new(name).yellow().bold());
                         }
                         if skipped < offset {
-                            result.extend(group.items.iter().skip(offset - skipped).cloned());
+                            result.extend(
+                                group.items.iter().skip(offset - skipped).cloned().map(ListItem::new),
+                            );
                             skipped += offset - skipped;
                         } else {
-                            result.extend(group.items.clone());
+                            result.extend(group.items.clone().into_iter().map(ListItem::new));
                         }
                         result.push(ListItem::new(Span::raw("")));
                     }
@@ -1115,7 +1117,7 @@ impl Pane for SearchPane {
                         if let Some(name) = group.name {
                             result.push(ListItem::new(name).yellow().bold());
                         }
-                        result.extend(group.items.clone());
+                        result.extend(group.items.clone().into_iter().map(ListItem::new));
                         result.push(ListItem::new(Span::raw("")));
                     }
                     let preview = List::new(result).style(config.as_text_style());
