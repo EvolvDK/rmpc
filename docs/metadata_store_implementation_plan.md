@@ -103,3 +103,19 @@ Après un redémarrage du système, les métadonnées des pistes YouTube dans la
     -   Si un tag est trouvé, elle utilisera l'ID de la chanson MPD et l'ID YouTube pour peupler (insérer ou ignorer si existant) la table `queue_youtube_metadata` de la base de données `rmpc.db`.
 - **Action 3: Mise à jour de l'API `DataStore`**:
     -   Créer une nouvelle méthode `sync_queue_from_mpd(&self, songs: &[Song])` qui effectuera cette synchronisation en une seule transaction pour des raisons de performance.
+
+## Goal 5: Amélioration de la lisibilité des textes longs
+
+### Problème
+Les textes longs (titres de chansons, noms de chaînes) sont tronqués dans plusieurs composants de l'interface utilisateur (panneau d'aperçu, listes de la bibliothèque et des résultats de recherche), ce qui rend difficile la lecture des informations complètes.
+
+### Solution
+
+#### 5.1. Affichage multi-lignes dans l'aperçu (Preview)
+- **Action**: Modifier la logique de rendu du panneau d'aperçu (`render_preview_data`) pour que les valeurs longues des métadonnées puissent s'afficher sur plusieurs lignes (`wrapping`) au lieu d'être tronquées.
+
+#### 5.2. Affichage temporaire dans la barre de statut pour les listes
+- **Action**: Implémenter un mécanisme d'affichage statique et temporaire pour les éléments sélectionnés dans les listes.
+    -   Lorsqu'un utilisateur navigue dans une liste (résultats de recherche, bibliothèque) et qu'un nouvel élément est sélectionné, son texte complet sera affiché dans la barre de statut via `status_info!`.
+    -   Pour éviter d'encombrer l'interface, ce message disparaîtra automatiquement après un court délai (par exemple, 3 secondes).
+    -   **Implémentation technique**: Utiliser le planificateur d'événements (`scheduler`) pour envoyer un événement de "nettoyage de la barre de statut" après le délai imparti.
