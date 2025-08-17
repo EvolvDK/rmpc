@@ -1164,7 +1164,7 @@ impl<'ui> Ui<'ui> {
                 self.on_finalize_playlist_import(ctx)?;
             }
             UiAppEvent::ClearStatusMessage => {
-                status_info!("");
+                ctx.messages.clear();
             }
         }
         Ok(())
