@@ -7,7 +7,7 @@ use itertools::Itertools;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Styled, Stylize},
-    text::Span,
+    text::{Span, Text},
     widgets::{Block, Borders, List, ListItem, Padding},
 };
 
@@ -198,7 +198,11 @@ impl SearchPane {
                 let data = Some(vec![PreviewGroup::from(
                     None,
                     None,
-                    self.songs_dir.to_list_items(&ctx.config),
+                    self.songs_dir
+                        .to_list_items(&ctx.config)
+                        .into_iter()
+                        .flat_map(|item| Into::<Text>::into(item).lines)
+                        .collect(),
                 )]);
                 ctx.query().id(PREVIEW).replace_id("preview").target(PaneType::Search).query(
                     |_| Ok(MpdQueryResult::Preview { data, origin_path: Some(origin_path) }),
@@ -1183,7 +1187,11 @@ impl Pane for SearchPane {
                 self.preview = Some(vec![PreviewGroup::from(
                     None,
                     None,
-                    self.songs_dir.to_list_items(&ctx.config),
+                    self.songs_dir
+                        .to_list_items(&ctx.config)
+                        .into_iter()
+                        .flat_map(|item| Into::<Text>::into(item).lines)
+                        .collect(),
                 )]);
                 ctx.render()?;
             }

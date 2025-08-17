@@ -2,6 +2,7 @@ use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
 use enum_map::EnumMap;
+use ratatui::text::Text;
 use itertools::Itertools;
 use ratatui::{Frame, prelude::Rect};
 
@@ -358,9 +359,12 @@ impl Pane for TagBrowserPane {
                     cached_artist
                         .0
                         .iter()
-                        .map(|album| {
-                            DirOrSong::name_only(album.name.clone())
-                                .to_list_item_simple(&ctx.config)
+                        .flat_map(|album| {
+                            Into::<Text>::into(
+                                DirOrSong::name_only(album.name.clone())
+                                    .to_list_item_simple(&ctx.config),
+                            )
+                            .lines
                         })
                         .collect(),
                 )];
@@ -616,7 +620,10 @@ impl BrowserPane<DirOrSong> for TagBrowserPane {
                 let songs = vec![PreviewGroup::from(
                     None,
                     None,
-                    songs.iter().map(|song| song.to_list_item_simple(&ctx.config)).collect_vec(),
+                    songs
+                        .iter()
+                        .flat_map(|song| Into::<Text>::into(song.to_list_item_simple(&ctx.config)).lines)
+                        .collect_vec(),
                 )];
                 self.stack_mut().set_preview(Some(songs));
                 ctx.render()?;
@@ -629,9 +636,12 @@ impl BrowserPane<DirOrSong> for TagBrowserPane {
                         albums
                             .0
                             .iter()
-                            .map(|CachedAlbum { name, .. }| {
-                                DirOrSong::name_only(name.to_owned())
-                                    .to_list_item_simple(&ctx.config)
+                            .flat_map(|CachedAlbum { name, .. }| {
+                                Into::<Text>::into(
+                                    DirOrSong::name_only(name.to_owned())
+                                        .to_list_item_simple(&ctx.config),
+                                )
+                                .lines
                             })
                             .collect(),
                     )]));

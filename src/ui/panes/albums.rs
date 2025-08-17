@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use enum_map::EnumMap;
+use ratatui::text::Text;
 use itertools::Itertools;
 use ratatui::{Frame, prelude::Rect};
 
@@ -344,6 +345,7 @@ impl BrowserPane<DirOrSong> for AlbumsPane {
                     .query(move |client| {
                         let data = list_titles(client, &current, &sort_order)?
                             .map(|v| v.to_list_item_simple(&config))
+                            .flat_map(|item| Into::<Text>::into(item).lines)
                             .collect_vec();
                         let data = PreviewGroup::from(None, None, data);
                         let data = Some(vec![data]);
