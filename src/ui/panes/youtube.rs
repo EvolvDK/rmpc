@@ -238,21 +238,6 @@ impl YouTubePane {
         if let Some(video) = self.get_selected_video() {
             self.add_youtube_video_to_queue(video, ctx)?;
         }
-
-        if old_selection != self.video_list_state.selected() {
-            if let Some(video) = self.get_selected_video() {
-                status_info!("Selected: {} - {}", video.title, video.channel);
-                ctx.scheduler.schedule_replace(
-                    *CLEAR_STATUS_JOB_ID,
-                    Duration::from_secs(3),
-                    |(event_tx, _)| {
-                        event_tx.send(AppEvent::UiEvent(UiAppEvent::ClearStatusMessage))?;
-                        Ok(())
-                    },
-                );
-            }
-        }
-
         Ok(())
     }
 
@@ -514,6 +499,21 @@ impl YouTubePane {
                 }
             }
         }
+
+        if old_selection != self.video_list_state.selected() {
+            if let Some(video) = self.get_selected_video() {
+                status_info!("Selected: {} - {}", video.title, video.channel);
+                ctx.scheduler.schedule_replace(
+                    *CLEAR_STATUS_JOB_ID,
+                    Duration::from_secs(3),
+                    |(event_tx, _)| {
+                        event_tx.send(AppEvent::UiEvent(UiAppEvent::ClearStatusMessage))?;
+                        Ok(())
+                    },
+                );
+            }
+        }
+
         Ok(())
     }
 
