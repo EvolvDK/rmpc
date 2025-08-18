@@ -92,17 +92,20 @@ L'utilisateur n'est pas informé des actions automatiques de l'application, comm
 Après un redémarrage du système, les métadonnées des pistes YouTube dans la file d'attente sont perdues car la base de données `rmpc.db` n'est pas synchronisée avec l'état de la file d'attente de MPD. Cela empêche l'affichage correct des métadonnées et le fonctionnement du rafraîchissement des URLs.
 
 ### Solution
-- **Principe**: MPD reste la source de vérité pour la file d'attente. Nous utiliserons les tags MPD pour marquer les pistes YouTube de manière persistante.
-- **Action 1: Marquage à l'ajout**:
-    -   Lorsqu'une chanson YouTube est ajoutée à la file d'attente, en plus de la commande `addid`, envoyer une commande `addtagid` pour attacher un tag `Comment` à la chanson.
-    -   Le tag aura un format standardisé, par exemple : `rmpc_yt_id=VIDEO_ID`.
+- **Principe**: L'approche précédente utilisant les tags `Comment` de MPD s'est avérée non fiable. La nouvelle stratégie consiste à intégrer l'ID YouTube directement dans l'URL de streaming, car le champ `file` de la chanson est garanti de persister.
+- **Action 1: Modification de l'URL à l'ajout**:
+    -   Lorsqu'une chanson YouTube est ajoutée à la file d'attente, après avoir obtenu l'URL de streaming, y ajouter un paramètre de requête personnalisé.
+    -   Le paramètre aura un format standardisé : `&rmpc_yt_id=VIDEO_ID`.
+    -   C'est cette URL modifiée qui sera ajoutée à la file d'attente de MPD.
 - **Action 2: Synchronisation au démarrage**:
-    -   Au lancement de l'application, avant d'initialiser les caches, implémenter une routine de synchronisation unique.
-    -   Cette routine lira l'intégralité de la file d'attente de MPD.
-    -   Pour chaque chanson, elle vérifiera la présence du tag `Comment` au format `rmpc_yt_id=...`.
-    -   Si un tag est trouvé, elle utilisera l'ID de la chanson MPD et l'ID YouTube pour peupler (insérer ou ignorer si existant) la table `queue_youtube_metadata` de la base de données `rmpc.db`.
-- **Action 3: Mise à jour de l'API `DataStore`**:
-    -   Créer une nouvelle méthode `sync_queue_from_mpd(&self, songs: &[Song])` qui effectuera cette synchronisation en une seule transaction pour des raisons de performance.
+    -   Au lancement de l'application, implémenter une routine de synchronisation qui lit l'intégralité de la file d'attente de MPD.
+    -   Pour chaque chanson, analyser son champ `file` (l'URL) pour y chercher le paramètre `rmpc_yt_id=...`.
+    -   Si le paramètre est trouvé, extraire l'ID de la chanson MPD et l'ID YouTube pour peupler la table `queue_youtube_metadata` dans `rmpc.db`.
+- **Action 3: Nettoyage de l'ancienne implémentation**:
+    -   Supprimer toute la logique de code liée à l'ajout de tags via `addtagid` pour le `Comment`.
+    -   Retirer toutes les fonctions qui tentent de lire ou d'analyser les tags `Comment` pour la synchronisation. Le concept de tag `Comment` pour la persistance doit être complètement éliminé du programme.
+- **Action 4: Mise à jour de l'API `DataStore`**:
+    -   Créer une nouvelle méthode `sync_queue_from_mpd(&self, songs: &[Song])` qui effectuera cette nouvelle synchronisation basée sur l'URL en une seule transaction pour des raisons de performance.
 
 ## Goal 5: Amélioration de la lisibilité des textes longs
 
