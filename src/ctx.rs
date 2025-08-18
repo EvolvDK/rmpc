@@ -92,13 +92,19 @@ impl Ctx {
 
         let status = client.get_status()?;
         let queue = client.playlist_info(sticker_support_needed)?.unwrap_or_default();
-        data_store.sync_queue_from_mpd(&queue)?;
+
+        log::info!("Synchronizing MPD queue with local database...");
+        if let Err(e) = data_store.sync_queue_from_mpd(&queue) {
+            log::error!(error:? = e; "Failed to synchronize queue with database");
+        }
+
         let youtube_library = data_store
             .get_all_library_videos()?
             .into_iter()
             .map(|v| (v.youtube_id.clone(), v))
             .collect();
         let queue_youtube_ids = data_store.get_all_queue_youtube_mappings()?;
+        log::info!("Queue synchronization complete.");
 
         if !supported_commands.contains("albumart") || !supported_commands.contains("readpicture") {
             config.album_art.method = ImageMethod::None;

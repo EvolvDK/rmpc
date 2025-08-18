@@ -153,14 +153,6 @@ impl DataStore {
         }
     }
 
-    /// Updates the `updated_at` timestamp for a given YouTube song in the queue.
-    pub fn touch_youtube_song(&self, song_id: u32) -> Result<(), DataStoreError> {
-        self.conn.borrow().execute(
-            "UPDATE queue_youtube_metadata SET updated_at = CURRENT_TIMESTAMP WHERE song_id = ?1",
-            [song_id],
-        )?;
-        Ok(())
-    }
 
     /// Removes metadata for a list of MPD queue song IDs.
     ///
@@ -247,7 +239,8 @@ impl DataStore {
             for song in songs {
                 if let Some(param_start) = song.file.find("&rmpc_yt_id=") {
                     let value_start = param_start + "&rmpc_yt_id=".len();
-                    let youtube_id = &song.file[value_start..];
+                    let remainder = &song.file[value_start..];
+                    let youtube_id = remainder.split('&').next().unwrap();
                     if !youtube_id.is_empty() {
                         stmt.execute((song.id, youtube_id))?;
                     }
