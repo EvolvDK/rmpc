@@ -620,8 +620,10 @@ impl<'ui> Ui<'ui> {
                 .id("refresh_youtube_song")
                 .query(move |client| {
                     client.delete_id(context.old_song_id)?;
+                    let tagged_url =
+                        crate::youtube::append_youtube_id_to_url(url, &video.youtube_id);
                     let song_id = client
-                        .add_id(&url, Some(QueuePosition::Absolute(context.position)))?
+                        .add_id(&tagged_url, Some(QueuePosition::Absolute(context.position)))?
                         .id
                         .context("MPD did not return an ID for the refreshed song")?;
 
@@ -635,8 +637,10 @@ impl<'ui> Ui<'ui> {
         } else {
             // This is a new song
             ctx.query().id("add_youtube_song").query(move |client| {
+                let tagged_url =
+                    crate::youtube::append_youtube_id_to_url(url, &video.youtube_id);
                 let song_id = client
-                    .add_id(&url, None)?
+                    .add_id(&tagged_url, None)?
                     .id
                     .context("MPD did not return an ID for the added song")?;
                 Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
@@ -663,8 +667,10 @@ impl<'ui> Ui<'ui> {
             .id("refresh_youtube_song")
             .query(move |client| {
                 client.delete_id(old_song_id)?;
+                let tagged_url =
+                    crate::youtube::append_youtube_id_to_url(url, &video.youtube_id);
                 let song_id = client
-                    .add_id(&url, Some(QueuePosition::Absolute(position as usize)))?
+                    .add_id(&tagged_url, Some(QueuePosition::Absolute(position as usize)))?
                     .id
                     .context("MPD did not return an ID for the refreshed song")?;
                 client.play_id(song_id)?;

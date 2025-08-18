@@ -276,3 +276,13 @@ pub async fn get_video_info(video_id: &str, ttl: Duration) -> Result<Option<YouT
 
     Ok(Some(video_info.into()))
 }
+
+/// Ajoute l'ID YouTube permanent à une URL de streaming comme paramètre de requête.
+///
+/// Cela permet la persistance de l'ID à travers les redémarrages de MPD,
+/// car le champ `file` est conservé.
+pub fn append_youtube_id_to_url(mut url: String, youtube_id: &str) -> String {
+    url.push_str("&rmpc_yt_id=");
+    url.push_str(youtube_id);
+    url
+}
