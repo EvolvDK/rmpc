@@ -121,7 +121,6 @@ pub trait MpdCommand {
     fn send_list_mounts(&mut self) -> MpdResult<()>;
     fn send_add(&mut self, path: &str, position: Option<QueuePosition>) -> MpdResult<()>;
     fn send_add_id(&mut self, uri: &str, position: Option<QueuePosition>) -> MpdResult<()>;
-    fn send_add_tag_id(&mut self, song_id: u32, tag: Tag, value: &str) -> MpdResult<()>;
     fn send_clear(&mut self) -> MpdResult<()>;
     fn send_delete_id(&mut self, id: u32) -> MpdResult<()>;
     fn send_delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()>;
@@ -247,7 +246,6 @@ pub trait MpdClient: Sized {
     // Current queue
     fn add(&mut self, path: &str, position: Option<QueuePosition>) -> MpdResult<()>;
     fn add_id(&mut self, uri: &str, position: Option<QueuePosition>) -> MpdResult<AddId>;
-    fn add_tag_id(&mut self, song_id: u32, tag: Tag, value: &str) -> MpdResult<()>;
     fn clear(&mut self) -> MpdResult<()>;
     fn delete_id(&mut self, id: u32) -> MpdResult<()>;
     fn delete_from_queue(&mut self, songs: SingleOrRange) -> MpdResult<()>;
@@ -505,10 +503,6 @@ impl MpdClient for Client<'_> {
 
     fn add_id(&mut self, uri: &str, position: Option<QueuePosition>) -> MpdResult<AddId> {
         self.send_add_id(uri, position).and_then(|()| self.read_response())
-    }
-
-    fn add_tag_id(&mut self, song_id: u32, tag: Tag, value: &str) -> MpdResult<()> {
-        self.send_add_tag_id(song_id, tag, value).and_then(|()| self.read_ok())
     }
 
     fn clear(&mut self) -> MpdResult<()> {
@@ -1089,15 +1083,6 @@ impl<T: SocketClient> MpdCommand for T {
         self.execute(&format!("addid {}{position_arg}", uri.quote_and_escape()))
     }
 
-    fn send_add_tag_id(&mut self, song_id: u32, tag: Tag, value: &str) -> MpdResult<()> {
-        self.execute(&format!(
-            "addtagid {} {} {}",
-            song_id,
-            tag.as_str(),
-            value.quote_and_escape()
-        ))
-    }
-
     fn send_clear(&mut self) -> MpdResult<()> {
         self.execute("clear")
     }
@@ -1500,7 +1485,6 @@ pub enum Tag {
     Title,
     File,
     Genre,
-    Comment,
     Custom(String),
 }
 
@@ -1514,7 +1498,6 @@ impl Tag {
             Tag::Title => "Title",
             Tag::File => "File",
             Tag::Genre => "Genre",
-            Tag::Comment => "Comment",
             Tag::Custom(v) => v,
         }
     }
