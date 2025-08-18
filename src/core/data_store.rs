@@ -313,26 +313,6 @@ impl DataStore {
         Ok(videos)
     }
 
-    /// Updates the metadata for an existing YouTube video in the library.
-    pub fn update_video_metadata(&self, video: &models::YouTubeVideo) -> Result<(), DataStoreError> {
-        self.conn.borrow().execute(
-            "
-            UPDATE videos
-            SET title = ?1, channel = ?2, album = ?3, duration_secs = ?4, thumbnail_url = ?5
-            WHERE youtube_id = ?6
-            ",
-            (
-                &video.title,
-                &video.channel,
-                &video.album,
-                &video.duration_secs,
-                &video.thumbnail_url,
-                &video.youtube_id,
-            ),
-        )?;
-        Ok(())
-    }
-
     // --- Playlist Management ---
 
     /// Creates a new, empty playlist.
