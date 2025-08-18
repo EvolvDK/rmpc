@@ -61,8 +61,7 @@ pub(crate) enum WorkRequest {
     RefreshYouTubeStream {
         old_song_id: u32,
         position: u32,
-        youtube_id: String,
-        video_title: String,
+        video: YouTubeVideo,
     },
     YouTubeGetVideoInfo {
         id: String,

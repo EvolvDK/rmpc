@@ -117,21 +117,18 @@ async fn handle_work_request(
             };
             event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
         }
-        WorkRequest::RefreshYouTubeStream {
-            old_song_id,
-            position,
-            youtube_id,
-            video_title,
-        } => {
-            let result = youtube::get_stream_url_and_metadata(&youtube_id).await;
+        WorkRequest::RefreshYouTubeStream { old_song_id, position, video } => {
+            let result = youtube::get_stream_url(&video.youtube_id, youtube_cache_ttl).await;
             let work_done = match result {
-                Ok((new_url, video)) => WorkDone::YouTubeStreamRefreshed {
+                Ok(new_url) => WorkDone::YouTubeStreamRefreshed {
                     new_url,
                     video,
                     old_song_id,
                     position,
                 },
-                Err(_) => WorkDone::YouTubeStreamRefreshFailed { video_title },
+                Err(_) => WorkDone::YouTubeStreamRefreshFailed {
+                    video_title: video.title,
+                },
             };
             event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
         }
