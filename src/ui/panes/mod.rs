@@ -450,6 +450,21 @@ impl Song {
         self.metadata.get("artist").map_or(Cow::Borrowed("Unknown"), |v| v.join(separator))
     }
 
+    pub fn youtube_id(&self) -> Option<&str> {
+        if let Some(param_start) = self.file.find("&rmpc_yt_id=") {
+            let value_start = param_start + "&rmpc_yt_id=".len();
+            let remainder = &self.file[value_start..];
+            let youtube_id = remainder.split('&').next().unwrap_or("");
+            if youtube_id.is_empty() {
+                None
+            } else {
+                Some(youtube_id)
+            }
+        } else {
+            None
+        }
+    }
+
     pub fn file_name(&self) -> Option<Cow<str>> {
         std::path::Path::new(&self.file).file_stem().map(|file_name| file_name.to_string_lossy())
     }

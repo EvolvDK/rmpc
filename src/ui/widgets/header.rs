@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use either::Either;
 use ratatui::{
     prelude::{Constraint, Layout},
@@ -12,7 +14,7 @@ use crate::{
         theme::properties::{Property, PropertyKind},
     },
     ctx::Ctx,
-    mpd::commands::Song,
+    mpd::commands::{metadata_tag::MetadataTag, Song},
 };
 
 pub struct Header<'a> {
@@ -30,7 +32,30 @@ impl Widget for Header<'_> {
         let row_count = config.theme.header.rows.len();
 
         let layouts = Layout::vertical((0..row_count).map(|_| Constraint::Length(1))).split(area);
-        let song = self.ctx.find_current_song_in_queue().map(|(_, song)| song);
+        let song_cow = self.ctx.find_current_song_in_queue().map(|(_, song)| {
+            if let Some(yt_id) = song.youtube_id() {
+                if let Some(video) = self.ctx.youtube_library.get(yt_id) {
+                    let mut enriched_song = song.clone();
+
+                    enriched_song.metadata.insert(
+                        "title".to_string(),
+                        MetadataTag::Single(video.title.clone()),
+                    );
+                    enriched_song.metadata.insert(
+                        "artist".to_string(),
+                        MetadataTag::Single(video.channel.clone()),
+                    );
+                    if let Some(album) = &video.album {
+                        enriched_song
+                            .metadata
+                            .insert("album".to_string(), MetadataTag::Single(album.clone()));
+                    }
+                    return Cow::Owned(enriched_song);
+                }
+            }
+            Cow::Borrowed(song)
+        });
+        let song = song_cow.as_deref();
         for row in 0..row_count {
             let [left, center, right] = *Layout::horizontal([
                 Constraint::Percentage(30),
