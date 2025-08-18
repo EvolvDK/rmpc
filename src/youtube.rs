@@ -52,11 +52,8 @@ impl From<YtDlpVideoInfo> for YouTubeVideo {
 
         let artist = info
             .artist
-            .or_else(|| info.artists.map(|a| a.join(", ")))
             .or(info.album_artist)
-            .or_else(|| info.album_artists.map(|a| a.join(", ")))
             .or(info.creator)
-            .or_else(|| info.creators.map(|c| c.join(", ")))
             .or(info.uploader)
             .or(info.channel.clone().into())
             .or(info.uploader_id)
