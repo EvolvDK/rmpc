@@ -451,7 +451,12 @@ fn main_task<B: Backend + std::io::Write>(
                         ("global_queue_update", None, MpdQueryResult::Queue(queue)) => {
                             let new_queue = queue.unwrap_or_default();
 
-                            // Sync DataStore with the new queue state
+                            // 1. Synchronisation complète de la base de données
+                            if let Err(e) = ctx.data_store.sync_queue_from_mpd(&new_queue) {
+                                status_error!("Failed to add new songs to DB during sync: {}", e);
+                            }
+
+                            // 2. Nettoyage des anciennes entrées de la base de données
                             if let Ok(db_song_ids) = ctx.data_store.get_all_queue_song_ids() {
                                 let new_queue_song_ids: HashSet<u32> =
                                     new_queue.iter().map(|s| s.id).collect();
@@ -464,13 +469,24 @@ fn main_task<B: Backend + std::io::Write>(
                                     if let Err(e) =
                                         ctx.data_store.remove_songs_from_queue(&ids_to_remove)
                                     {
-                                        status_error!("Failed to sync queue with database: {}", e);
+                                        status_error!(
+                                            "Failed to remove old songs from DB during sync: {}",
+                                            e
+                                        );
                                     }
                                 }
                             } else {
                                 status_error!(
                                     "Failed to read queue song IDs from database for sync."
                                 );
+                            }
+
+                            // 3. Mise à jour du cache en mémoire
+                            match ctx.data_store.get_all_queue_youtube_mappings() {
+                                Ok(mappings) => ctx.queue_youtube_ids = mappings,
+                                Err(e) => {
+                                    status_error!("Failed to refresh YouTube ID cache after sync: {}", e)
+                                }
                             }
 
                             ctx.queue = new_queue;
@@ -493,36 +509,9 @@ fn main_task<B: Backend + std::io::Write>(
                     WorkDone::None => {}
                 },
                 AppEvent::WorkDone(Err(err)) => {
-                    if let Some(MpdError::Mpd(MpdFailureResponse {
-                        code: ErrorCode::NoExist,
-                        command: cmd,
-                        ..
-                    })) = err.downcast_ref::<MpdError>()
-                    {
-                        if cmd == "playid" {
-                            if let (Some(song_id), Some(pos)) =
-                                (ctx.status.songid, ctx.status.song)
-                            {
-                                if let Ok(Some((youtube_id, _))) =
-                                    ctx.data_store.get_youtube_id_for_song(song_id)
-                                {
-                                    if let Some(song) = ctx.queue.get(pos as usize) {
-                                        let video_title = song.title_str("").to_string();
-                                        try_skip!(
-                                            ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
-                                                old_song_id: song_id,
-                                                position: pos,
-                                                youtube_id,
-                                                video_title,
-                                            }),
-                                            "Failed to send YouTube stream refresh request"
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                    if !handle_youtube_stream_error(&err, &mut ctx) {
+                        status_error!("{}", err);
                     }
-                    status_error!("{}", err);
                 }
                 AppEvent::Resized { columns, rows } => {
                     ctx.scheduler.schedule_replace(
@@ -664,6 +653,39 @@ fn main_task<B: Backend + std::io::Write>(
     }
 
     terminal
+}
+
+/// Gère spécifiquement l'erreur d'une URL de streaming YouTube expirée.
+/// Retourne `true` si l'erreur a été gérée, `false` sinon.
+fn handle_youtube_stream_error(err: &anyhow::Error, ctx: &mut Ctx) -> bool {
+    if let Some(MpdError::Mpd(MpdFailureResponse {
+        code: ErrorCode::NoExist,
+        command,
+        ..
+    })) = err.downcast_ref::<MpdError>()
+    {
+        if command == "playid" {
+            if let (Some(song_id), Some(pos)) = (ctx.status.songid, ctx.status.song) {
+                if let Ok(Some((youtube_id, _))) = ctx.data_store.get_youtube_id_for_song(song_id)
+                {
+                    if let Some(song) = ctx.queue.get(pos as usize) {
+                        let video_title = song.title_str("").to_string();
+                        try_skip!(
+                            ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
+                                old_song_id: song_id,
+                                position: pos,
+                                youtube_id,
+                                video_title,
+                            }),
+                            "Failed to send YouTube stream refresh request"
+                        );
+                        return true; // Erreur gérée
+                    }
+                }
+            }
+        }
+    }
+    false // Erreur non gérée
 }
 
 fn handle_idle_event(event: IdleEvent, ctx: &Ctx, result_ui_evs: &mut HashSet<UiEvent>) {
