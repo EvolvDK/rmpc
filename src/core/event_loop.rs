@@ -65,6 +65,22 @@ fn main_task<B: Backend + std::io::Write>(
     let mut _update_loop_guard = None;
     let mut _update_db_loop_guard = None;
 
+    // Synchronize the database with the MPD queue state on startup.
+    log::info!("Synchronizing MPD queue with local database...");
+    if let Err(e) = ctx.data_store.sync_queue_from_mpd(&ctx.queue) {
+        log::error!(error:? = e; "Failed to synchronize queue with database");
+    } else {
+        match ctx.data_store.get_all_queue_youtube_mappings() {
+            Ok(mappings) => {
+                ctx.queue_youtube_ids = mappings;
+                log::info!("Queue synchronization complete.");
+            }
+            Err(e) => {
+                log::error!(error:? = e; "Failed to refresh YouTube ID cache after sync");
+            }
+        }
+    }
+
     // Tmux hooks have to be initialized after ui, because ueberzugpp replaces all
     // hooks on its init instead of simply appending and might break rmpc's hooks
     let mut tmux = match crate::shared::tmux::TmuxHooks::new() {

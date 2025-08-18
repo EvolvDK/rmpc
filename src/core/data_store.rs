@@ -245,9 +245,11 @@ impl DataStore {
                 "INSERT OR IGNORE INTO queue_youtube_metadata (song_id, youtube_id) VALUES (?1, ?2)",
             )?;
             for song in songs {
-                if let Some(comment) = song.metadata.get("Comment") {
-                    if let Some(yt_id) = comment.first().strip_prefix("rmpc_yt_id=") {
-                        stmt.execute((song.id, yt_id))?;
+                if let Some(param_start) = song.file.find("&rmpc_yt_id=") {
+                    let value_start = param_start + "&rmpc_yt_id=".len();
+                    let youtube_id = &song.file[value_start..];
+                    if !youtube_id.is_empty() {
+                        stmt.execute((song.id, youtube_id))?;
                     }
                 }
             }
