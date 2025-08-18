@@ -156,9 +156,9 @@ impl Default for UiConfigFile {
                 modifiers: Some(Modifiers::Bold),
             }),
             highlight_border_style: Some(StyleFile {
-                fg: Some("blue".to_string()),
+                fg: Some("white".to_string()),
                 bg: None,
-                modifiers: None,
+                modifiers: Some(Modifiers::Bold),
             }),
             tab_bar: TabBarFile {
                 enabled: Some(true),
