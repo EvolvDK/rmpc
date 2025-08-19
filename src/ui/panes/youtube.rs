@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode};
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use itertools::Itertools;
 use ratatui::{
@@ -82,6 +82,16 @@ impl SearchMode {
         let current_index = Self::MODES.iter().position(|&m| m == *self).unwrap_or(0);
         let prev_index = (current_index + Self::MODES.len() - 1) % Self::MODES.len();
         Self::MODES[prev_index]
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Fuzzy => "Fuzzy",
+            Self::Contains => "Contains",
+            Self::StartsWith => "Starts With",
+            Self::Exact => "Exact Match",
+            Self::Regex => "Regex",
+        }
     }
 }
 
@@ -349,6 +359,22 @@ impl YouTubePane {
     }
 
     fn handle_search_input_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
+        let modifiers = event.inner().modifiers;
+        if let KeyCode::Char('m') = event.code() {
+            if modifiers == KeyModifiers::CONTROL {
+                self.search_mode = self.search_mode.next();
+                self.filter_search_results();
+                event.stop_propagation();
+                ctx.render()?;
+                return Ok(());
+            } else if modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
+                self.search_mode = self.search_mode.previous();
+                self.filter_search_results();
+                event.stop_propagation();
+                ctx.render()?;
+                return Ok(());
+            }
+        }
         match event.code() {
             KeyCode::Enter => {
                 let query = self.search_input.value().to_string();
@@ -661,9 +687,10 @@ impl Pane for YouTubePane {
         self.search_input_area = search_layout[0];
         self.search_results_area = search_layout[1];
 
+        let title = format!("Search Query [{}]", self.search_mode.display_name());
         let input_block = Block::default()
             .borders(Borders::ALL)
-            .title("Search Query")
+            .title(title)
             .border_style(if self.focus == Focus::SearchInput {
                 ctx.config.as_focused_border_style()
             } else {
@@ -808,6 +835,13 @@ impl Pane for YouTubePane {
         let pos = event.into();
         match event.kind {
             MouseEventKind::LeftClick => {
+                if self.search_input_area.contains(pos) && pos.y == self.search_input_area.y {
+                    self.search_mode = self.search_mode.next();
+                    self.filter_search_results();
+                    self.focus = Focus::SearchInput;
+                    ctx.app_event_sender.send(AppEvent::RequestRender)?;
+                    return Ok(());
+                }
                 if self.search_input_area.contains(pos) {
                     self.focus = Focus::SearchInput;
                 } else if self.search_results_area.contains(pos) {
