@@ -109,33 +109,33 @@ async fn handle_work_request(
             let result = WorkDone::SingleLrcIndexed { lrc_entry: LrcIndex::index_single(path)? };
             event_tx.send(AppEvent::WorkDone(Ok(result)))?;
         }
-        WorkRequest::GetYouTubeStreamUrl { video, context } => {
-            let result = youtube::get_stream_url(&video.youtube_id, youtube_cache_ttl).await;
+        WorkRequest::GetYouTubeStreamUrl { song, context } => {
+            let result = youtube::get_stream_url(&song.youtube_id, youtube_cache_ttl).await;
             let work_done = match result {
-                Ok(url) => WorkDone::YouTubeStreamUrlReady { url, video, context },
-                Err(_) => WorkDone::YouTubeStreamUrlFailed { video, context },
+                Ok(url) => WorkDone::YouTubeStreamUrlReady { url, song, context },
+                Err(_) => WorkDone::YouTubeStreamUrlFailed { song, context },
             };
             event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
         }
-        WorkRequest::RefreshYouTubeStream { old_song_id, position, video } => {
-            let result = youtube::get_stream_url(&video.youtube_id, youtube_cache_ttl).await;
+        WorkRequest::RefreshYouTubeStream { old_song_id, position, song } => {
+            let result = youtube::get_stream_url(&song.youtube_id, youtube_cache_ttl).await;
             let work_done = match result {
                 Ok(new_url) => WorkDone::YouTubeStreamRefreshed {
                     new_url,
-                    video,
+                    song,
                     old_song_id,
                     position,
                 },
                 Err(_) => WorkDone::YouTubeStreamRefreshFailed {
-                    video_title: video.title,
+                    song_title: song.title,
                 },
             };
             event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
         }
-        WorkRequest::YouTubeGetVideoInfo { id } => {
-            if let Ok(Some(video)) = youtube::get_video_info(&id, youtube_cache_ttl).await {
-                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeVideoInfoFetched(
-                    video,
+        WorkRequest::YouTubeGetSongInfo { id } => {
+            if let Ok(Some(song)) = youtube::get_song_info(&id, youtube_cache_ttl).await {
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFetched(
+                    song,
                 ))))?;
             }
         }

@@ -10,56 +10,71 @@ use std::{
 use tokio::{io::{AsyncBufReadExt, BufReader}, process::{Child, Command}};
 
 use crate::{
-    core::data_store::models::YouTubeVideo,
+    core::data_store::models::YouTubeSong,
     shared::events::{AppEvent, WorkDone},
 };
 
-/// Représente les métadonnées brutes d'une vidéo YouTube, désérialisées depuis yt-dlp.
+/// Représente les métadonnées brutes d'une chanson YouTube, désérialisées depuis yt-dlp.
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct YtDlpVideoInfo {
+pub(crate) struct YtDlpSongInfo {
     // Champs pour l'affichage brut
     pub id: String,
-    pub title: String,
-    pub channel: String,
     pub duration: f64,
     pub thumbnail: Option<String>,
 
-    // Champs pour le mappage prioritaire
+    // Champs pour le mappage prioritaire - tous Option<String>
+    // Priorité titre: track -> title -> fulltitle -> alt_title -> display_id
     track: Option<String>,
-    artist: Option<String>,
-    album: Option<String>,
-    album_artist: Option<String>,
-    creator: Option<String>,
-    uploader: Option<String>,
-    uploader_id: Option<String>,
+    title: Option<String>,
     fulltitle: Option<String>,
     alt_title: Option<String>,
     display_id: Option<String>,
+    
+    // Priorité artiste: artist -> album_artist -> creator -> uploader -> channel -> uploader_id
+    artist: Option<String>,
+    album_artist: Option<String>,
+    creator: Option<String>,
+    uploader: Option<String>,
+    channel: Option<String>,
+    uploader_id: Option<String>,
+    
+    // Album reste optionnel
+    album: Option<String>,
 }
 
-impl From<YtDlpVideoInfo> for YouTubeVideo {
-    fn from(info: YtDlpVideoInfo) -> Self {
-        let title = info
-            .track
-            .or(info.title.clone().into())
-            .or(info.fulltitle)
-            .or(info.alt_title)
-            .or(info.display_id)
-            .unwrap_or_default();
+impl YtDlpSongInfo {
+    /// Résout le titre selon la priorité définie: track -> title -> fulltitle -> alt_title -> display_id
+    fn resolve_title(&self) -> String {
+        self.track
+            .as_ref()
+            .or(self.title.as_ref())
+            .or(self.fulltitle.as_ref())
+            .or(self.alt_title.as_ref())
+            .or(self.display_id.as_ref())
+            .cloned()
+            .unwrap_or_default()
+    }
 
-        let artist = info
-            .artist
-            .or(info.album_artist)
-            .or(info.creator)
-            .or(info.uploader)
-            .or(info.channel.clone().into())
-            .or(info.uploader_id)
-            .unwrap_or_default();
+    /// Résout l'artiste selon la priorité définie: artist -> album_artist -> creator -> uploader -> channel -> uploader_id
+    fn resolve_artist(&self) -> String {
+        self.artist
+            .as_ref()
+            .or(self.album_artist.as_ref())
+            .or(self.creator.as_ref())
+            .or(self.uploader.as_ref())
+            .or(self.channel.as_ref())
+            .or(self.uploader_id.as_ref())
+            .cloned()
+            .unwrap_or_default()
+    }
+}
 
+impl From<YtDlpSongInfo> for YouTubeSong {
+    fn from(info: YtDlpSongInfo) -> Self {
         Self {
             youtube_id: info.id,
-            title,
-            channel: artist,
+            title: info.resolve_title(),
+            artist: info.resolve_artist(),
             album: info.album,
             duration_secs: info.duration as u32,
             thumbnail_url: info.thumbnail,
@@ -67,18 +82,20 @@ impl From<YtDlpVideoInfo> for YouTubeVideo {
     }
 }
 
-impl YouTubeVideo {
-    /// Converts a YouTubeVideo into a generic Song structure for previewing.
+impl YouTubeSong {
+    /// Converts a YouTubeSong into a generic Song structure for previewing.
     pub(crate) fn to_song_for_preview(&self) -> crate::mpd::commands::Song {
         use crate::mpd::commands::metadata_tag::MetadataTag;
         use std::collections::HashMap;
 
         let mut metadata = HashMap::new();
         metadata.insert("title".to_string(), MetadataTag::Single(self.title.clone()));
-        metadata.insert("artist".to_string(), MetadataTag::Single(self.channel.clone()));
+        metadata.insert("artist".to_string(), MetadataTag::Single(self.artist.clone()));
+        
         if let Some(album) = &self.album {
             metadata.insert("album".to_string(), MetadataTag::Single(album.clone()));
         }
+        
         metadata.insert("ID".to_string(), MetadataTag::Single(self.youtube_id.clone()));
 
         crate::mpd::commands::Song {
@@ -92,15 +109,15 @@ impl YouTubeVideo {
 
 #[derive(Debug)]
 struct Cache {
-    searches: Mutex<HashMap<String, (Instant, Vec<YtDlpVideoInfo>)>>,
+    searches: Mutex<HashMap<String, (Instant, Vec<YtDlpSongInfo>)>>,
     stream_urls: Mutex<HashMap<String, (Instant, String)>>,
-    video_info: Mutex<HashMap<String, (Instant, YtDlpVideoInfo)>>,
+    song_info: Mutex<HashMap<String, (Instant, YtDlpSongInfo)>>,
 }
 
 static CACHE: Lazy<Cache> = Lazy::new(|| Cache {
     searches: Default::default(),
     stream_urls: Default::default(),
-    video_info: Default::default(),
+    song_info: Default::default(),
 });
 
 struct ChildProcessGuard(Child);
@@ -143,12 +160,12 @@ pub async fn search(
     let mut results_for_cache = Vec::new();
 
     while let Some(line) = reader.next_line().await? {
-        if let Ok(video_info) = serde_json::from_str::<YtDlpVideoInfo>(&line) {
+        if let Ok(song_info) = serde_json::from_str::<YtDlpSongInfo>(&line) {
             if ttl > Duration::ZERO {
-                results_for_cache.push(video_info.clone());
+                results_for_cache.push(song_info.clone());
             }
             event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult {
-                video_info,
+                song_info,
                 generation,
             })))?;
         }
@@ -175,11 +192,11 @@ pub async fn search(
 /// Récupère l'URL de streaming pour le meilleur format audio d'une vidéo YouTube.
 ///
 /// # Arguments
-/// * `video_id` - L'ID de la vidéo YouTube.
+/// * `song_id` - L'ID de la vidéo YouTube.
 /// * `ttl` - La durée de vie du cache.
-pub async fn get_stream_url(video_id: &str, ttl: Duration) -> Result<String> {
+pub async fn get_stream_url(song_id: &str, ttl: Duration) -> Result<String> {
     if ttl > Duration::ZERO {
-        if let Some((created, url)) = CACHE.stream_urls.lock().unwrap().get(video_id) {
+        if let Some((created, url)) = CACHE.stream_urls.lock().unwrap().get(song_id) {
             if created.elapsed() < ttl {
                 return Ok(url.clone());
             }
@@ -190,7 +207,7 @@ pub async fn get_stream_url(video_id: &str, ttl: Duration) -> Result<String> {
         .arg("-g") // Get URL
         .arg("-f") // Format
         .arg("bestaudio")
-        .arg(format!("https://www.youtube.com/watch?v={}", video_id))
+        .arg(format!("https://www.youtube.com/watch?v={}", song_id))
         .output()
         .await?;
 
@@ -209,44 +226,44 @@ pub async fn get_stream_url(video_id: &str, ttl: Duration) -> Result<String> {
             .stream_urls
             .lock()
             .unwrap()
-            .insert(video_id.to_string(), (Instant::now(), url.clone()));
+            .insert(song_id.to_string(), (Instant::now(), url.clone()));
     }
 
     Ok(url)
 }
 
-pub async fn get_video_info(video_id: &str, ttl: Duration) -> Result<Option<YouTubeVideo>> {
+pub async fn get_song_info(song_id: &str, ttl: Duration) -> Result<Option<YouTubeSong>> {
     if ttl > Duration::ZERO {
-        if let Some((created, video_info)) = CACHE.video_info.lock().unwrap().get(video_id) {
+        if let Some((created, song_info)) = CACHE.song_info.lock().unwrap().get(song_id) {
             if created.elapsed() < ttl {
-                return Ok(Some(video_info.clone().into()));
+                return Ok(Some(song_info.clone().into()));
             }
         }
     }
 
     let output = Command::new("yt-dlp")
         .arg("--dump-json")
-        .arg(format!("https://www.youtube.com/watch?v={}", video_id))
+        .arg(format!("https://www.youtube.com/watch?v={}", song_id))
         .output()
         .await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        log::warn!("yt-dlp get_video_info for {} failed: {}", video_id, stderr);
+        log::warn!("yt-dlp get_song_info for {} failed: {}", song_id, stderr);
         return Ok(None);
     }
 
-    let video_info: YtDlpVideoInfo = serde_json::from_slice(&output.stdout)?;
+    let song_info: YtDlpSongInfo = serde_json::from_slice(&output.stdout)?;
 
     if ttl > Duration::ZERO {
         CACHE
-            .video_info
+            .song_info
             .lock()
             .unwrap()
-            .insert(video_id.to_string(), (Instant::now(), video_info.clone()));
+            .insert(song_id.to_string(), (Instant::now(), song_info.clone()));
     }
 
-    Ok(Some(video_info.into()))
+    Ok(Some(song_info.into()))
 }
 
 /// Ajoute l'ID YouTube permanent à une URL de streaming comme paramètre de requête.

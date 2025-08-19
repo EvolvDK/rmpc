@@ -18,10 +18,10 @@ use crate::{
         tabs::PaneType,
         theme::UiConfig,
     },
-    core::data_store::models::YouTubeVideo,
+    core::data_store::models::YouTubeSong,
     mpd::commands::IdleEvent,
     ui::UiAppEvent,
-    youtube::YtDlpVideoInfo,
+    youtube::YtDlpSongInfo,
 };
 
 #[derive(Debug, Clone)]
@@ -55,15 +55,15 @@ pub(crate) enum WorkRequest {
         generation: u64,
     },
     GetYouTubeStreamUrl {
-        video: YouTubeVideo,
+        song: YouTubeSong,
         context: Option<RefreshContext>,
     },
     RefreshYouTubeStream {
         old_song_id: u32,
         position: u32,
-        video: YouTubeVideo,
+        song: YouTubeSong,
     },
-    YouTubeGetVideoInfo {
+    YouTubeGetSongInfo {
         id: String,
     },
 }
@@ -74,7 +74,7 @@ pub(crate) enum WorkDone {
     LyricsIndexed { index: LrcIndex },
     SingleLrcIndexed { lrc_entry: Option<LrcIndexEntry> },
     YouTubeSearchResult {
-        video_info: YtDlpVideoInfo,
+        song_info: YtDlpSongInfo,
         generation: u64,
     },
     YouTubeSearchFinished {
@@ -82,24 +82,24 @@ pub(crate) enum WorkDone {
     },
     YouTubeStreamUrlReady {
         url: String,
-        video: YouTubeVideo,
+        song: YouTubeSong,
         context: Option<RefreshContext>,
     },
     YouTubeStreamUrlFailed {
-        video: YouTubeVideo,
+        song: YouTubeSong,
         context: Option<RefreshContext>,
     },
     YouTubeStreamRefreshed {
         new_url: String,
-        video: YouTubeVideo,
+        song: YouTubeSong,
         old_song_id: u32,
         position: u32,
     },
     YouTubeStreamRefreshFailed {
-        video_title: String,
+        song_title: String,
     },
     MpdCommandFinished { id: &'static str, target: Option<PaneType>, data: MpdQueryResult },
-    YouTubeVideoInfoFetched(YouTubeVideo),
+    YouTubeSongInfoFetched(YouTubeSong),
     None,
 }
 

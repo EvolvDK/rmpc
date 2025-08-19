@@ -27,7 +27,7 @@ use self::{
     panes::Pane,
 };
 use crate::{
-    core::data_store::models::{PlaylistItem, YouTubeVideo},
+    core::data_store::models::{PlaylistItem, YouTubeSong},
     MpdQueryResult,
     shared::events::AppEvent,
     config::{
@@ -80,7 +80,7 @@ pub struct StatusMessage {
 #[derive(Debug)]
 struct PendingPlaylistImport {
     name: String,
-    video_ids: Vec<String>,
+    song_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -107,24 +107,24 @@ macro_rules! active_tab_call {
 }
 
 impl<'ui> Ui<'ui> {
-    fn get_youtube_master_library(&mut self, ctx: &mut Ctx) -> Result<HashMap<String, YouTubeVideo>> {
+    fn get_youtube_master_library(&mut self, ctx: &mut Ctx) -> Result<HashMap<String, YouTubeSong>> {
         Ok(ctx
             .data_store
-            .get_all_library_videos()?
+            .get_all_library_songs()?
             .into_iter()
             .map(|v| (v.youtube_id.clone(), v))
             .collect())
     }
 
-    fn sync_videos_to_playlists_pane(
+    fn sync_songs_to_playlists_pane(
         &mut self,
-        videos_to_sync: &[YouTubeVideo],
+        songs_to_sync: &[YouTubeSong],
         ctx: &mut Ctx,
     ) -> Result<()> {
-        if !videos_to_sync.is_empty() {
+        if !songs_to_sync.is_empty() {
             if let Panes::RmpcPlaylists(p) = self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
-                for video in videos_to_sync {
-                    p.add_video(video);
+                for song in songs_to_sync {
+                    p.add_song(song);
                 }
             }
         }
@@ -588,12 +588,12 @@ impl<'ui> Ui<'ui> {
 
     pub fn on_youtube_search_result(
         &mut self,
-        video_info: crate::youtube::YtDlpVideoInfo,
+        song_info: crate::youtube::YtDlpSongInfo,
         generation: u64,
         ctx: &mut Ctx,
     ) -> Result<()> {
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.on_search_result(video_info, generation);
+            p.on_search_result(song_info, generation);
         }
         Ok(ctx.render()?)
     }
@@ -608,12 +608,12 @@ impl<'ui> Ui<'ui> {
     pub fn on_youtube_stream_url_ready(
         &mut self,
         url: String,
-        video: YouTubeVideo,
+        song: YouTubeSong,
         context: Option<crate::shared::events::RefreshContext>,
         ctx: &mut Ctx,
     ) -> Result<()> {
-        log::info!("Adding YouTube video to queue, ID: {}", video.youtube_id);
-        let title = video.title.clone();
+        log::info!("Adding YouTube song to queue, ID: {}", song.youtube_id);
+        let title = song.title.clone();
         if let Some(context) = context {
             // This is a refresh for an existing song
             ctx.query()
@@ -621,7 +621,7 @@ impl<'ui> Ui<'ui> {
                 .query(move |client| {
                     client.delete_id(context.old_song_id)?;
                     let tagged_url =
-                        crate::youtube::append_youtube_id_to_url(url, &video.youtube_id);
+                        crate::youtube::append_youtube_id_to_url(url, &song.youtube_id);
                     let song_id = client
                         .add_id(&tagged_url, Some(QueuePosition::Absolute(context.position)))?
                         .id
@@ -631,19 +631,19 @@ impl<'ui> Ui<'ui> {
                         client.play_id(song_id)?;
                     }
 
-                    Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
+                    Ok(MpdQueryResult::YouTubeSongAdded { song_id, song })
                 });
             status_info!("Refreshed '{}' in queue", title);
         } else {
             // This is a new song
             ctx.query().id("add_youtube_song").query(move |client| {
                 let tagged_url =
-                    crate::youtube::append_youtube_id_to_url(url, &video.youtube_id);
+                    crate::youtube::append_youtube_id_to_url(url, &song.youtube_id);
                 let song_id = client
                     .add_id(&tagged_url, None)?
                     .id
                     .context("MPD did not return an ID for the added song")?;
-                Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
+                Ok(MpdQueryResult::YouTubeSongAdded { song_id, song })
             });
             status_info!("Added '{}' to queue", title);
         }
@@ -653,7 +653,7 @@ impl<'ui> Ui<'ui> {
     pub fn on_youtube_stream_refreshed(
         &mut self,
         url: String,
-        video: YouTubeVideo,
+        song: YouTubeSong,
         old_song_id: u32,
         position: u32,
         ctx: &mut Ctx,
@@ -663,26 +663,26 @@ impl<'ui> Ui<'ui> {
             .query(move |client| {
                 client.delete_id(old_song_id)?;
                 let tagged_url =
-                    crate::youtube::append_youtube_id_to_url(url, &video.youtube_id);
+                    crate::youtube::append_youtube_id_to_url(url, &song.youtube_id);
                 let song_id = client
                     .add_id(&tagged_url, Some(QueuePosition::Absolute(position as usize)))?
                     .id
                     .context("MPD did not return an ID for the refreshed song")?;
                 client.play_id(song_id)?;
-                Ok(MpdQueryResult::YouTubeSongAdded { song_id, video })
+                Ok(MpdQueryResult::YouTubeSongAdded { song_id, song })
             });
         Ok(())
     }
 
     pub fn on_youtube_stream_url_failed(
         &mut self,
-        video: YouTubeVideo,
+        song: YouTubeSong,
         _context: Option<crate::shared::events::RefreshContext>,
         ctx: &mut Ctx,
     ) -> Result<()> {
         status_error!(
-            "Could not fetch stream for '{}'. The video may have been deleted.",
-            video.title
+            "Could not fetch stream for '{}'. The song may have been deleted.",
+            song.title
         );
 
         let modal = menu::modal::MenuModal::new(ctx)
@@ -692,7 +692,7 @@ impl<'ui> Ui<'ui> {
                         .item("Remove from library?", |_| Ok(()))
                         .item("Yes", move |ctx| {
                             ctx.app_event_sender.send(AppEvent::UiEvent(
-                                UiAppEvent::YouTubeLibraryRemoveVideo(video.youtube_id),
+                                UiAppEvent::YouTubeLibraryRemoveSong(song.youtube_id),
                             ))?;
                             Ok(())
                         })
@@ -705,13 +705,13 @@ impl<'ui> Ui<'ui> {
         Ok(ctx.render()?)
     }
 
-    pub fn on_youtube_video_info_fetched(&mut self, video: YouTubeVideo, ctx: &mut Ctx) -> Result<()> {
-        ctx.data_store.add_video_to_library(&video)?;
-        ctx.youtube_library.insert(video.youtube_id.clone(), video.clone());
-        self.sync_videos_to_playlists_pane(&[video.clone()], ctx)?;
+    pub fn on_youtube_song_info_fetched(&mut self, song: YouTubeSong, ctx: &mut Ctx) -> Result<()> {
+        ctx.data_store.add_song_to_library(&song)?;
+        ctx.youtube_library.insert(song.youtube_id.clone(), song.clone());
+        self.sync_songs_to_playlists_pane(&[song.clone()], ctx)?;
 
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.add_video(video);
+            p.add_song(song);
         }
 
         if self.pending_youtube_imports > 0 {
@@ -728,15 +728,15 @@ impl<'ui> Ui<'ui> {
         Ok(ctx.render()?)
     }
 
-    pub fn on_youtube_library_remove_video(&mut self, video_id: &str, ctx: &mut Ctx) -> Result<()> {
-        ctx.data_store.remove_video_from_library(video_id)?;
+    pub fn on_youtube_library_remove_song(&mut self, song_id: &str, ctx: &mut Ctx) -> Result<()> {
+        ctx.data_store.remove_song_from_library(song_id)?;
         if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.remove_video(video_id);
+            p.remove_song(song_id);
         }
         if let Panes::RmpcPlaylists(p) = self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
-            p.remove_video(video_id);
+            p.remove_song(song_id);
         }
-        status_info!("Removed video from library.");
+        status_info!("Removed song from library.");
         Ok(ctx.render()?)
     }
 
@@ -754,7 +754,7 @@ impl<'ui> Ui<'ui> {
             });
         }
 
-        let library_videos = self.get_youtube_master_library(ctx)?;
+        let library_songs = self.get_youtube_master_library(ctx)?;
         let mut added_count = 0;
         let mut skipped_count = 0;
 
@@ -770,7 +770,7 @@ impl<'ui> Ui<'ui> {
         for item in items {
             let is_duplicate = match &item {
                 PlaylistItem::Local(path) => existing_local_files.contains(path),
-                PlaylistItem::YouTube(video) => existing_yt_ids.contains(&video.youtube_id),
+                PlaylistItem::YouTube(song) => existing_yt_ids.contains(&song.youtube_id),
             };
 
             if is_duplicate {
@@ -786,16 +786,16 @@ impl<'ui> Ui<'ui> {
                         Ok(())
                     });
                 }
-                PlaylistItem::YouTube(video) => {
-                    if let Some(video) = library_videos.get(&video.youtube_id) {
+                PlaylistItem::YouTube(song) => {
+                    if let Some(song) = library_songs.get(&song.youtube_id) {
                         ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                            video: video.clone(),
+                            song: song.clone(),
                             context: None,
                         })?;
                     } else {
                         status_warn!(
-                            "Could not find YouTube video with ID {} in library, skipping.",
-                            video.youtube_id
+                            "Could not find YouTube song with ID {} in library, skipping.",
+                            song.youtube_id
                         );
                         added_count -= 1; // It was not actually added
                     }
@@ -833,10 +833,10 @@ impl<'ui> Ui<'ui> {
                     PlaylistItem::Local(path) => {
                         ctx.data_store.add_local_file_to_playlist(playlist_id, &path)?;
                     }
-                    PlaylistItem::YouTube(video) => {
-                        ctx.data_store.add_video_to_library(&video)?;
+                    PlaylistItem::YouTube(song) => {
+                        ctx.data_store.add_song_to_library(&song)?;
                         ctx.data_store
-                            .add_youtube_video_to_playlist(playlist_id, &video.youtube_id)?;
+                            .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
                     }
                 }
             }
@@ -861,10 +861,10 @@ impl<'ui> Ui<'ui> {
                 PlaylistItem::Local(path) => {
                     ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
                 }
-                PlaylistItem::YouTube(video) => {
-                    ctx.data_store.add_video_to_library(video)?;
+                PlaylistItem::YouTube(song) => {
+                    ctx.data_store.add_song_to_library(song)?;
                     ctx.data_store
-                        .add_youtube_video_to_playlist(playlist_id, &video.youtube_id)?;
+                        .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
                 }
             }
         }
@@ -880,29 +880,29 @@ impl<'ui> Ui<'ui> {
         #[derive(Debug, Deserialize)]
         struct TakeoutSong {
             #[serde(rename = "ID vidéo")]
-            video_id: String,
+            song_id: String,
         }
 
-        let library = ctx.data_store.get_all_library_videos()?;
-        let all_video_ids: std::collections::HashSet<String> =
+        let library = ctx.data_store.get_all_library_songs()?;
+        let all_song_ids: std::collections::HashSet<String> =
             library.into_iter().map(|v| v.youtube_id).collect();
 
         let mut reader = csv::Reader::from_path(path)?;
         let mut count = 0;
         for result in reader.deserialize() {
             let record: TakeoutSong = result?;
-            if !all_video_ids.contains(&record.video_id) {
+            if !all_song_ids.contains(&record.song_id) {
                 ctx.work_sender
-                    .send(WorkRequest::YouTubeGetVideoInfo { id: record.video_id })?;
+                    .send(WorkRequest::YouTubeGetSongInfo { id: record.song_id })?;
                 count += 1;
             }
         }
 
         if count > 0 {
             self.pending_youtube_imports = count;
-            status_info!("Importing {} new videos in the background.", count);
+            status_info!("Importing {} new songs in the background.", count);
         } else {
-            status_info!("No new videos to import.");
+            status_info!("No new songs to import.");
         }
         Ok(())
     }
@@ -913,11 +913,11 @@ impl<'ui> Ui<'ui> {
         #[derive(Debug, Deserialize)]
         struct TakeoutSong {
             #[serde(rename = "ID vidéo")]
-            video_id: String,
+            song_id: String,
         }
 
         let mut pending_playlists = Vec::new();
-        let mut all_required_video_ids = std::collections::HashSet::new();
+        let mut all_required_song_ids = std::collections::HashSet::new();
 
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
@@ -925,15 +925,15 @@ impl<'ui> Ui<'ui> {
             if path.is_file() && path.extension().is_some_and(|ext| ext == "csv") {
                 if let Some(playlist_name) = path.file_stem().and_then(|s| s.to_str()) {
                     let mut reader = csv::Reader::from_path(&path)?;
-                    let mut video_ids = Vec::new();
+                    let mut song_ids = Vec::new();
                     for result in reader.deserialize() {
                         let record: TakeoutSong = result?;
-                        all_required_video_ids.insert(record.video_id.clone());
-                        video_ids.push(record.video_id);
+                        all_required_song_ids.insert(record.song_id.clone());
+                        song_ids.push(record.song_id);
                     }
                     pending_playlists.push(PendingPlaylistImport {
                         name: playlist_name.to_string(),
-                        video_ids,
+                        song_ids,
                     });
                 }
             }
@@ -941,26 +941,26 @@ impl<'ui> Ui<'ui> {
 
         let existing_library_ids: std::collections::HashSet<String> = ctx
             .data_store
-            .get_all_library_videos()?
+            .get_all_library_songs()?
             .into_iter()
             .map(|v| v.youtube_id)
             .collect();
 
-        let missing_video_ids: Vec<_> = all_required_video_ids
+        let missing_song_ids: Vec<_> = all_required_song_ids
             .difference(&existing_library_ids)
             .cloned()
             .collect();
 
-        if !missing_video_ids.is_empty() {
-            self.pending_youtube_imports = missing_video_ids.len();
+        if !missing_song_ids.is_empty() {
+            self.pending_youtube_imports = missing_song_ids.len();
             self.pending_playlist_import = pending_playlists;
             status_info!(
-                "Importing {} playlists. Fetching info for {} new videos...",
+                "Importing {} playlists. Fetching info for {} new songs...",
                 self.pending_playlist_import.len(),
                 self.pending_youtube_imports
             );
-            for video_id in missing_video_ids {
-                ctx.work_sender.send(WorkRequest::YouTubeGetVideoInfo { id: video_id })?;
+            for song_id in missing_song_ids {
+                ctx.work_sender.send(WorkRequest::YouTubeGetSongInfo { id: song_id })?;
             }
         } else {
             self.pending_playlist_import = pending_playlists;
@@ -983,9 +983,9 @@ impl<'ui> Ui<'ui> {
                 Err(e) => return Err(e.into()),
             };
 
-            for video_id in playlist_to_import.video_ids {
+            for song_id in playlist_to_import.song_ids {
                 ctx.data_store
-                    .add_youtube_video_to_playlist(playlist_id, &video_id)?;
+                    .add_youtube_song_to_playlist(playlist_id, &song_id)?;
             }
         }
 
@@ -1043,7 +1043,7 @@ impl<'ui> Ui<'ui> {
             }
         };
 
-        let library_videos = self.get_youtube_master_library(ctx)?;
+        let library_songs = self.get_youtube_master_library(ctx)?;
 
         status_info!("Loading {} items from playlist '{}'...", items.len(), name);
         for item in items {
@@ -1054,15 +1054,15 @@ impl<'ui> Ui<'ui> {
                         Ok(())
                     });
                 }
-                PlaylistItem::YouTube(video) => {
-                    let id = video.youtube_id;
-                    if let Some(video) = library_videos.get(&id) {
+                PlaylistItem::YouTube(song) => {
+                    let id = song.youtube_id;
+                    if let Some(song) = library_songs.get(&id) {
                         ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                            video: video.clone(),
+                            song: song.clone(),
                             context: None,
                         })?;
                     } else {
-                        status_warn!("Could not find YouTube video with ID {} in library, skipping.", id);
+                        status_warn!("Could not find YouTube song with ID {} in library, skipping.", id);
                     }
                 }
             }
@@ -1115,8 +1115,8 @@ impl<'ui> Ui<'ui> {
                 self.change_tab(tab_name, ctx)?;
                 ctx.render()?;
             }
-            UiAppEvent::YouTubeLibraryRemoveVideo(video_id) => {
-                self.on_youtube_library_remove_video(&video_id, ctx)?;
+            UiAppEvent::YouTubeLibraryRemoveSong(song_id) => {
+                self.on_youtube_library_remove_song(&song_id, ctx)?;
             }
             UiAppEvent::ExecuteCommand(cmd_str) => {
                 self.handle_command(cmd_str, ctx)?;
@@ -1346,21 +1346,21 @@ impl<'ui> Ui<'ui> {
                 }
                 (
                     "add_youtube_song" | "refresh_youtube_song",
-                    MpdQueryResult::YouTubeSongAdded { song_id, video },
+                    MpdQueryResult::YouTubeSongAdded { song_id, song },
                 ) => {
                     ctx.data_store
-                        .add_youtube_song_to_queue(song_id, &video.youtube_id)?;
-                    ctx.data_store.add_video_to_library(&video)?;
+                        .add_youtube_song_to_queue(song_id, &song.youtube_id)?;
+                    ctx.data_store.add_song_to_library(&song)?;
                     ctx.youtube_library
-                        .insert(video.youtube_id.clone(), video.clone());
-                    ctx.queue_youtube_ids.insert(song_id, video.youtube_id.clone());
+                        .insert(song.youtube_id.clone(), song.clone());
+                    ctx.queue_youtube_ids.insert(song_id, song.youtube_id.clone());
                     if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-                        p.add_video(video.clone());
+                        p.add_song(song.clone());
                     }
                     if let Panes::RmpcPlaylists(p) =
                         self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)?
                     {
-                        p.add_video(&video);
+                        p.add_song(&song);
                     }
                 }
                 (id, mut data) => {
@@ -1382,7 +1382,7 @@ pub enum UiAppEvent {
     PopModal(Id),
     PopConfigErrorModal,
     ChangeTab(TabName),
-    YouTubeLibraryRemoveVideo(String),
+    YouTubeLibraryRemoveSong(String),
     ExecuteCommand(String),
     RefreshRmpcPlaylists,
     AddPlaylistItemsToQueue(Vec<PlaylistItem>),

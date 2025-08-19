@@ -1,8 +1,8 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct YouTubeVideo {
+pub struct YouTubeSong {
     pub youtube_id: String,
     pub title: String,
-    pub channel: String,
+    pub artist: String,
     pub album: Option<String>,
     pub duration_secs: u32,
     pub thumbnail_url: Option<String>,
@@ -10,7 +10,7 @@ pub struct YouTubeVideo {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlaylistItem {
-    YouTube(YouTubeVideo),
+    YouTube(YouTubeSong),
     Local(String),
 }
 

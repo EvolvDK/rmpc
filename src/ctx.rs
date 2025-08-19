@@ -10,7 +10,7 @@ use bon::bon;
 use crossbeam::channel::{SendError, Sender, bounded};
 
 use crate::{
-    core::data_store::{models::YouTubeVideo, DataStore},
+    core::data_store::{models::YouTubeSong, DataStore},
     AppEvent,
     MpdCommand,
     MpdQuery,
@@ -46,7 +46,7 @@ pub struct Ctx {
     pub(crate) data_store: DataStore,
     pub(crate) status: Status,
     pub(crate) queue: Vec<Song>,
-    pub(crate) youtube_library: HashMap<String, YouTubeVideo>,
+    pub(crate) youtube_library: HashMap<String, YouTubeSong>,
     pub(crate) queue_youtube_ids: HashMap<u32, String>,
     pub(crate) active_tab: TabName,
     pub(crate) supported_commands: HashSet<String>,
@@ -99,7 +99,7 @@ impl Ctx {
         }
 
         let youtube_library = data_store
-            .get_all_library_videos()?
+            .get_all_library_songs()?
             .into_iter()
             .map(|v| (v.youtube_id.clone(), v))
             .collect();

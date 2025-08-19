@@ -317,20 +317,20 @@ impl Pane for QueuePane {
                 .iter()
                 .map(|song| {
                     if let Some(youtube_id) = ctx.queue_youtube_ids.get(&song.id) {
-                        if let Some(video_info) = ctx.youtube_library.get(youtube_id) {
+                        if let Some(song_info) = ctx.youtube_library.get(youtube_id) {
                             let mut enriched_song = song.clone();
                             enriched_song.duration = Some(std::time::Duration::from_secs(
-                                video_info.duration_secs as u64,
+                                song_info.duration_secs as u64,
                             ));
                             enriched_song.metadata.insert(
                                 "title".to_string(),
-                                MetadataTag::Single(video_info.title.clone()),
+                                MetadataTag::Single(song_info.title.clone()),
                             );
                             enriched_song.metadata.insert(
                                 "artist".to_string(),
-                                MetadataTag::Single(video_info.channel.clone()),
+                                MetadataTag::Single(song_info.artist.clone()),
                             );
-                            if let Some(album) = &video_info.album {
+                            if let Some(album) = &song_info.album {
                                 enriched_song.metadata.insert(
                                     "album".to_string(),
                                     MetadataTag::Single(album.clone()),

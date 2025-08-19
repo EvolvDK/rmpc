@@ -20,10 +20,10 @@ use once_cell::sync::Lazy;
 
 use crate::{
     config::keys::CommonAction,
-    core::data_store::models::{PlaylistItem, YouTubeVideo},
+    core::data_store::models::{PlaylistItem, YouTubeSong},
     shared::id,
     ctx::Ctx,
-    youtube::YtDlpVideoInfo,
+    youtube::YtDlpSongInfo,
     shared::{
         events::{AppEvent, WorkRequest},
         key_event::KeyEvent,
@@ -43,8 +43,8 @@ static CLEAR_STATUS_JOB_ID: Lazy<id::Id> = Lazy::new(id::new);
 enum Focus {
     SearchInput,
     SearchResults,
-    LibraryChannels,
-    LibraryVideos,
+    LibraryArtists,
+    LibrarySongs,
 }
 
 impl Default for Focus {
@@ -96,7 +96,7 @@ impl SearchMode {
 }
 
 #[derive(Debug, Default)]
-enum LibraryVideoFocus {
+enum LibrarySongFocus {
     #[default]
     List,
     Preview,
@@ -104,28 +104,28 @@ enum LibraryVideoFocus {
 
 pub struct YouTubePane {
     focus: Focus,
-    library_video_focus: LibraryVideoFocus,
+    library_song_focus: LibrarySongFocus,
     // Search state
     search_mode: SearchMode,
     search_generation: u64,
     search_input: Input,
-    raw_search_results: Vec<YtDlpVideoInfo>,
-    filtered_search_results: Vec<(i64, YtDlpVideoInfo, Vec<usize>)>,
+    raw_search_results: Vec<YtDlpSongInfo>,
+    filtered_search_results: Vec<(i64, YtDlpSongInfo, Vec<usize>)>,
     search_list_state: ListState,
     is_loading_search: bool,
     matcher: SkimMatcherV2,
     // Library state
-    pub videos_by_channel: BTreeMap<String, Vec<YouTubeVideo>>,
-    channels: Vec<String>,
-    channel_list_state: ListState,
-    video_list_state: ListState,
-    selected_channels: BTreeSet<usize>,
-    selected_videos: BTreeMap<String, BTreeSet<usize>>,
+    pub songs_by_artist: BTreeMap<String, Vec<YouTubeSong>>,
+    artists: Vec<String>,
+    artist_list_state: ListState,
+    song_list_state: ListState,
+    selected_artists: BTreeSet<usize>,
+    selected_songs: BTreeMap<String, BTreeSet<usize>>,
     // Area cache for mouse events
     search_input_area: Rect,
     search_results_area: Rect,
-    library_channels_area: Rect,
-    library_videos_area: Rect,
+    library_artists_area: Rect,
+    library_songs_area: Rect,
 }
 
 impl std::fmt::Debug for YouTubePane {
@@ -138,15 +138,15 @@ const CTRL_ALT: KeyModifiers = KeyModifiers::CONTROL.union(KeyModifiers::ALT);
 
 impl YouTubePane {
     pub fn new(ctx: &Ctx) -> Result<Self> {
-        let videos = ctx.data_store.get_all_library_videos()?;
-        let mut videos_by_channel: BTreeMap<String, Vec<YouTubeVideo>> = BTreeMap::new();
-        for video in videos {
-            videos_by_channel.entry(video.channel.clone()).or_default().push(video);
+        let songs = ctx.data_store.get_all_library_songs()?;
+        let mut songs_by_artist: BTreeMap<String, Vec<YouTubeSong>> = BTreeMap::new();
+        for song in songs {
+            songs_by_artist.entry(song.artist.clone()).or_default().push(song);
         }
-        let channels = videos_by_channel.keys().cloned().collect();
+        let artists = songs_by_artist.keys().cloned().collect();
         Ok(Self {
             focus: Focus::default(),
-            library_video_focus: LibraryVideoFocus::default(),
+            library_song_focus: LibrarySongFocus::default(),
             search_mode: SearchMode::default(),
             search_generation: 0,
             search_input: Input::default(),
@@ -155,23 +155,23 @@ impl YouTubePane {
             search_list_state: ListState::default(),
             is_loading_search: false,
             matcher: SkimMatcherV2::default(),
-            videos_by_channel,
-            channels,
-            channel_list_state: ListState::default(),
-            video_list_state: ListState::default(),
-            selected_channels: BTreeSet::new(),
-            selected_videos: BTreeMap::new(),
+            songs_by_artist,
+            artists,
+            artist_list_state: ListState::default(),
+            song_list_state: ListState::default(),
+            selected_artists: BTreeSet::new(),
+            selected_songs: BTreeMap::new(),
             search_input_area: Rect::default(),
             search_results_area: Rect::default(),
-            library_channels_area: Rect::default(),
-            library_videos_area: Rect::default(),
+            library_artists_area: Rect::default(),
+            library_songs_area: Rect::default(),
         })
     }
 
     // Search methods
-    pub fn on_search_result(&mut self, video_info: YtDlpVideoInfo, generation: u64) {
+    pub fn on_search_result(&mut self, song_info: YtDlpSongInfo, generation: u64) {
         if generation == self.search_generation {
-            self.raw_search_results.push(video_info);
+            self.raw_search_results.push(song_info);
             self.filter_search_results();
         }
     }
@@ -200,10 +200,10 @@ impl YouTubePane {
                     self.filtered_search_results = self
                         .raw_search_results
                         .iter()
-                        .filter_map(|video_info| {
+                        .filter_map(|song_info| {
                             self.matcher
-                                .fuzzy_indices(&video_info.title, query)
-                                .map(|(score, indices)| (score, video_info.clone(), indices))
+                                .fuzzy_indices(&song_info.title, query)
+                                .map(|(score, indices)| (score, song_info.clone(), indices))
                         })
                         .sorted_by_key(|(score, _, _)| -*score)
                         .collect();
@@ -258,51 +258,51 @@ impl YouTubePane {
     }
 
     // Library methods
-    pub fn add_video(&mut self, video: YouTubeVideo) {
-        let videos = self.videos_by_channel.entry(video.channel.clone()).or_default();
-        if !videos.iter().any(|v| v.youtube_id == video.youtube_id) {
-            videos.push(video);
-            self.update_channels();
+    pub fn add_song(&mut self, song: YouTubeSong) {
+        let songs = self.songs_by_artist.entry(song.artist.clone()).or_default();
+        if !songs.iter().any(|v| v.youtube_id == song.youtube_id) {
+            songs.push(song);
+            self.update_artists();
         }
     }
 
-    pub fn remove_video(&mut self, video_id: &str) {
-        let mut empty_channel = None;
-        for (channel, videos) in self.videos_by_channel.iter_mut() {
-            let video_count = videos.len();
-            videos.retain(|v| v.youtube_id != video_id);
-            if videos.len() < video_count {
-                // A video was removed, so invalidate selections for this channel
-                self.selected_videos.remove(channel);
+    pub fn remove_song(&mut self, song_id: &str) {
+        let mut empty_artist = None;
+        for (artist, songs) in self.songs_by_artist.iter_mut() {
+            let song_count = songs.len();
+            songs.retain(|v| v.youtube_id != song_id);
+            if songs.len() < song_count {
+                // A song was removed, so invalidate selections for this artist
+                self.selected_songs.remove(artist);
             }
-            if videos.is_empty() {
-                empty_channel = Some(channel.clone());
+            if songs.is_empty() {
+                empty_artist = Some(artist.clone());
             }
         }
-        if let Some(channel) = empty_channel {
-            self.videos_by_channel.remove(&channel);
-            self.update_channels();
-            self.channel_list_state.select(Some(0));
-            self.video_list_state.select(Some(0));
+        if let Some(artist) = empty_artist {
+            self.songs_by_artist.remove(&artist);
+            self.update_artists();
+            self.artist_list_state.select(Some(0));
+            self.song_list_state.select(Some(0));
         }
     }
 
-    fn update_channels(&mut self) {
-        self.channels = self.videos_by_channel.keys().cloned().collect();
-        if self.channel_list_state.selected().is_none() && !self.channels.is_empty() {
-            self.channel_list_state.select(Some(0));
-            self.video_list_state.select(Some(0));
+    fn update_artists(&mut self) {
+        self.artists = self.songs_by_artist.keys().cloned().collect();
+        if self.artist_list_state.selected().is_none() && !self.artists.is_empty() {
+            self.artist_list_state.select(Some(0));
+            self.song_list_state.select(Some(0));
         }
     }
 
-    fn get_selected_channel(&self) -> Option<&str> {
-        self.channel_list_state.selected().and_then(|i| self.channels.get(i)).map(|s| s.as_str())
+    fn get_selected_artist(&self) -> Option<&str> {
+        self.artist_list_state.selected().and_then(|i| self.artists.get(i)).map(|s| s.as_str())
     }
 
-    fn get_selected_video(&self) -> Option<&YouTubeVideo> {
-        let channel = self.get_selected_channel()?;
-        let videos = self.videos_by_channel.get(channel)?;
-        self.video_list_state.selected().and_then(|i| videos.get(i))
+    fn get_selected_song(&self) -> Option<&YouTubeSong> {
+        let artist = self.get_selected_artist()?;
+        let songs = self.songs_by_artist.get(artist)?;
+        self.song_list_state.selected().and_then(|i| songs.get(i))
     }
 
     // Navigation methods
@@ -312,36 +312,36 @@ impl YouTubePane {
         list_state.select(Some(next as usize));
     }
 
-    fn add_youtube_video_to_queue(&self, video: &YouTubeVideo, ctx: &mut Ctx) -> Result<()> {
+    fn add_youtube_song_to_queue(&self, song: &YouTubeSong, ctx: &mut Ctx) -> Result<()> {
         let queue_yt_ids = ctx.data_store.get_all_queue_youtube_ids()?;
-        if queue_yt_ids.contains(&video.youtube_id) {
-            status_info!("'{}' is already in the queue.", video.title);
+        if queue_yt_ids.contains(&song.youtube_id) {
+            status_info!("'{}' is already in the queue.", song.title);
             return Ok(());
         }
 
-        status_info!("Fetching stream URL for '{}'...", video.title);
+        status_info!("Fetching stream URL for '{}'...", song.title);
         ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-            video: video.clone(),
+            song: song.clone(),
             context: None,
         })?;
         ctx.render()?;
         Ok(())
     }
 
-    fn add_selected_video_to_queue(&self, ctx: &mut Ctx) -> Result<()> {
-        if let Some(video) = self.get_selected_video() {
-            self.add_youtube_video_to_queue(video, ctx)?;
+    fn add_selected_song_to_queue(&self, ctx: &mut Ctx) -> Result<()> {
+        if let Some(song) = self.get_selected_song() {
+            self.add_youtube_song_to_queue(song, ctx)?;
         }
         Ok(())
     }
 
-    fn show_youtube_context_menu(&self, selected_videos: Vec<YouTubeVideo>, ctx: &Ctx) -> Result<()> {
-        if selected_videos.is_empty() {
+    fn show_youtube_context_menu(&self, selected_songs: Vec<YouTubeSong>, ctx: &Ctx) -> Result<()> {
+        if selected_songs.is_empty() {
             return Ok(());
         }
 
         let items: Vec<_> =
-            selected_videos.iter().map(|v| PlaylistItem::YouTube(v.clone())).collect();
+            selected_songs.iter().map(|v| PlaylistItem::YouTube(v.clone())).collect();
         let playlists: Vec<_> = ctx
             .data_store
             .get_all_playlists()?
@@ -353,7 +353,7 @@ impl YouTubePane {
             .list_section(ctx, menu::queue_actions(items.clone()))
             .list_section(ctx, menu::add_to_playlist_actions(items.clone(), playlists))
             .list_section(ctx, menu::create_playlist_action(items))
-            .list_section(ctx, menu::youtube_library_actions(selected_videos))
+            .list_section(ctx, menu::youtube_library_actions(selected_songs))
             .list_section(ctx, |s| Some(s.item("Cancel", |_| Ok(()))))
             .build();
 
@@ -422,7 +422,7 @@ impl YouTubePane {
                     event.stop_propagation();
                     ctx.render()?;
                 } else if matches!(key_code, KeyCode::Right) {
-                    self.focus = Focus::LibraryChannels;
+                    self.focus = Focus::LibraryArtists;
                 }
             }
         }
@@ -451,9 +451,9 @@ impl YouTubePane {
                 ),
                 CommonAction::Confirm => {
                     if let Some(index) = self.search_list_state.selected() {
-                        if let Some((_, video_info, _)) = self.filtered_search_results.get(index) {
-                            let video: YouTubeVideo = video_info.clone().into();
-                            self.add_youtube_video_to_queue(&video, ctx)?;
+                        if let Some((_, song_info, _)) = self.filtered_search_results.get(index) {
+                            let song: YouTubeSong = song_info.clone().into();
+                            self.add_youtube_song_to_queue(&song, ctx)?;
                         }
                     }
                     event.stop_propagation();
@@ -464,8 +464,8 @@ impl YouTubePane {
 
         if old_selection != self.search_list_state.selected() {
             if let Some(index) = self.search_list_state.selected() {
-                if let Some((_, video_info, _)) = self.filtered_search_results.get(index) {
-                    status_info!("Selected: {} - {}", video_info.title, video_info.channel);
+                if let Some((_, song_info, _)) = self.filtered_search_results.get(index) {
+                    status_info!("Selected: {} - {}", song_info.title, song_info.artist);
                     ctx.scheduler.schedule_replace(
                         *CLEAR_STATUS_JOB_ID,
                         Duration::from_secs(3),
@@ -477,49 +477,49 @@ impl YouTubePane {
                 }
             }
         } else if let KeyCode::Right = event.code() {
-            self.focus = Focus::LibraryChannels;
+            self.focus = Focus::LibraryArtists;
         }
 
         Ok(())
     }
 
-    fn handle_library_channels_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
+    fn handle_library_artists_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
         if let Some(action) = event.as_common_action(ctx) {
             match action {
                 CommonAction::Down => {
                     Self::move_selection(
-                        &mut self.channel_list_state,
-                        self.channels.len(),
+                        &mut self.artist_list_state,
+                        self.artists.len(),
                         1,
                     );
-                    self.video_list_state.select(Some(0));
+                    self.song_list_state.select(Some(0));
                 }
                 CommonAction::Up => {
                     Self::move_selection(
-                        &mut self.channel_list_state,
-                        self.channels.len(),
+                        &mut self.artist_list_state,
+                        self.artists.len(),
                         -1,
                     );
-                    self.video_list_state.select(Some(0));
+                    self.song_list_state.select(Some(0));
                 }
                 _ => {}
             }
         }
         match event.code() {
             KeyCode::Char(' ') => {
-                if let Some(selected_idx) = self.channel_list_state.selected() {
-                    if let Some(channel_name) = self.channels.get(selected_idx).cloned() {
-                        if self.selected_channels.remove(&selected_idx) {
-                            // Deselect channel, remove video selections for it
-                            self.selected_videos.remove(&channel_name);
+                if let Some(selected_idx) = self.artist_list_state.selected() {
+                    if let Some(artist_name) = self.artists.get(selected_idx).cloned() {
+                        if self.selected_artists.remove(&selected_idx) {
+                            // Deselect artist, remove song selections for it
+                            self.selected_songs.remove(&artist_name);
                         } else {
-                            // Select channel, select all its videos
-                            self.selected_channels.insert(selected_idx);
-                            if let Some(videos) =
-                                self.videos_by_channel.get(&channel_name)
+                            // Select artist, select all its songs
+                            self.selected_artists.insert(selected_idx);
+                            if let Some(songs) =
+                                self.songs_by_artist.get(&artist_name)
                             {
-                                let all_indices = (0..videos.len()).collect();
-                                self.selected_videos.insert(channel_name, all_indices);
+                                let all_indices = (0..songs.len()).collect();
+                                self.selected_songs.insert(artist_name, all_indices);
                             }
                         }
                     }
@@ -527,16 +527,16 @@ impl YouTubePane {
                 event.stop_propagation();
             }
             KeyCode::Esc => {
-                if !self.selected_channels.is_empty() {
-                    self.selected_channels.clear();
-                    self.selected_videos.clear();
+                if !self.selected_artists.is_empty() {
+                    self.selected_artists.clear();
+                    self.selected_songs.clear();
                     event.stop_propagation();
                 }
             }
             KeyCode::Left => self.focus = Focus::SearchInput,
-            KeyCode::Right => self.focus = Focus::LibraryVideos,
+            KeyCode::Right => self.focus = Focus::LibrarySongs,
             KeyCode::Enter => {
-                self.add_selected_video_to_queue(ctx)?;
+                self.add_selected_song_to_queue(ctx)?;
                 event.stop_propagation();
             }
             _ => {}
@@ -544,39 +544,39 @@ impl YouTubePane {
         Ok(())
     }
 
-    fn handle_library_videos_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
-        let old_selection = self.video_list_state.selected();
+    fn handle_library_songs_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
+        let old_selection = self.song_list_state.selected();
 
-        match self.library_video_focus {
-            LibraryVideoFocus::List => {
+        match self.library_song_focus {
+            LibrarySongFocus::List => {
                 if let Some(action) = event.as_common_action(ctx) {
                     match action {
                         CommonAction::Down => {
-                            let videos = self
-                                .get_selected_channel()
-                                .and_then(|c| self.videos_by_channel.get(c));
-                            if let Some(videos) = videos {
+                            let songs = self
+                                .get_selected_artist()
+                                .and_then(|c| self.songs_by_artist.get(c));
+                            if let Some(songs) = songs {
                                 Self::move_selection(
-                                    &mut self.video_list_state,
-                                    videos.len(),
+                                    &mut self.song_list_state,
+                                    songs.len(),
                                     1,
                                 );
                             }
                         }
                         CommonAction::Up => {
-                            let videos = self
-                                .get_selected_channel()
-                                .and_then(|c| self.videos_by_channel.get(c));
-                            if let Some(videos) = videos {
+                            let songs = self
+                                .get_selected_artist()
+                                .and_then(|c| self.songs_by_artist.get(c));
+                            if let Some(songs) = songs {
                                 Self::move_selection(
-                                    &mut self.video_list_state,
-                                    videos.len(),
+                                    &mut self.song_list_state,
+                                    songs.len(),
                                     -1,
                                 );
                             }
                         }
                         CommonAction::Confirm => {
-                            self.add_selected_video_to_queue(ctx)?;
+                            self.add_selected_song_to_queue(ctx)?;
                             event.stop_propagation();
                         }
                         _ => {}
@@ -584,12 +584,12 @@ impl YouTubePane {
                 }
                 match event.code() {
                     KeyCode::Char(' ') => {
-                        if let Some(channel_name) =
-                            self.get_selected_channel().map(|s| s.to_string())
+                        if let Some(artist_name) =
+                            self.get_selected_artist().map(|s| s.to_string())
                         {
-                            if let Some(selected_idx) = self.video_list_state.selected() {
+                            if let Some(selected_idx) = self.song_list_state.selected() {
                                 let selections =
-                                    self.selected_videos.entry(channel_name).or_default();
+                                    self.selected_songs.entry(artist_name).or_default();
                                 if !selections.remove(&selected_idx) {
                                     selections.insert(selected_idx);
                                 }
@@ -598,11 +598,11 @@ impl YouTubePane {
                         event.stop_propagation();
                     }
                     KeyCode::Esc => {
-                        if let Some(channel_name) =
-                            self.get_selected_channel().map(|s| s.to_string())
+                        if let Some(artist_name) =
+                            self.get_selected_artist().map(|s| s.to_string())
                         {
                             if let Some(selections) =
-                                self.selected_videos.get_mut(&channel_name)
+                                self.selected_songs.get_mut(&artist_name)
                             {
                                 if !selections.is_empty() {
                                     selections.clear();
@@ -611,28 +611,28 @@ impl YouTubePane {
                             }
                         }
                     }
-                    KeyCode::Left => self.focus = Focus::LibraryChannels,
-                    KeyCode::Right => self.library_video_focus = LibraryVideoFocus::Preview,
+                    KeyCode::Left => self.focus = Focus::LibraryArtists,
+                    KeyCode::Right => self.library_song_focus = LibrarySongFocus::Preview,
                     KeyCode::Delete => {
-                        if let Some(video) = self.get_selected_video() {
+                        if let Some(song) = self.get_selected_song() {
                             ctx.app_event_sender.send(AppEvent::UiEvent(
-                                UiAppEvent::YouTubeLibraryRemoveVideo(video.youtube_id.clone()),
+                                UiAppEvent::YouTubeLibraryRemoveSong(song.youtube_id.clone()),
                             ))?;
                         }
                     }
                     _ => {}
                 }
             }
-            LibraryVideoFocus::Preview => {
+            LibrarySongFocus::Preview => {
                 if let KeyCode::Left = event.code() {
-                    self.library_video_focus = LibraryVideoFocus::List;
+                    self.library_song_focus = LibrarySongFocus::List;
                 }
             }
         }
 
-        if old_selection != self.video_list_state.selected() {
-            if let Some(video) = self.get_selected_video() {
-                status_info!("Selected: {} - {}", video.title, video.channel);
+        if old_selection != self.song_list_state.selected() {
+            if let Some(song) = self.get_selected_song() {
+                status_info!("Selected: {} - {}", song.title, song.artist);
                 ctx.scheduler.schedule_replace(
                     *CLEAR_STATUS_JOB_ID,
                     Duration::from_secs(3),
@@ -648,7 +648,7 @@ impl YouTubePane {
     }
 
     fn render_search_result_item<'a>(
-        video_info: &'a YtDlpVideoInfo,
+        song_info: &'a YtDlpSongInfo,
         indices: &'a [usize],
         ctx: &'a Ctx,
     ) -> ListItem<'a> {
@@ -660,7 +660,7 @@ impl YouTubePane {
         let mut is_currently_highlighted = false;
 
         // Nous ne pouvons surligner que le titre, car les indices ne s'appliquent qu'à lui.
-        for (i, char) in video_info.title.char_indices() {
+        for (i, char) in song_info.title.char_indices() {
             let should_be_highlighted = highlighted_indices.contains(&i);
 
             if i == 0 {
@@ -681,7 +681,7 @@ impl YouTubePane {
         }
 
         // Ajouter le reste de la chaîne (artiste) sans style particulier.
-        spans.push(Span::raw(format!(" - {}", video_info.channel)));
+        spans.push(Span::raw(format!(" - {}", song_info.artist)));
 
         ListItem::new(Line::from(spans))
     }
@@ -697,8 +697,8 @@ impl Pane for YouTubePane {
                 Constraint::Percentage(30),
             ])
             .split(area);
-        self.library_channels_area = columns[1];
-        self.library_videos_area = columns[2];
+        self.library_artists_area = columns[1];
+        self.library_songs_area = columns[2];
 
         // --- Column 1: Search ---
         let search_layout = Layout::default()
@@ -758,54 +758,54 @@ impl Pane for YouTubePane {
         );
 
         // --- Column 2: Library Artists / Tracks ---
-        let channels_block = Block::default()
+        let artists_block = Block::default()
             .borders(Borders::ALL)
             .title("Library: Artists")
-            .border_style(if self.focus == Focus::LibraryChannels {
+            .border_style(if self.focus == Focus::LibraryArtists {
                 ctx.config.as_focused_border_style()
             } else {
                 ctx.config.as_border_style()
             });
-        let channel_items: Vec<ListItem> = self
-            .channels
+        let artist_items: Vec<ListItem> = self
+            .artists
             .iter()
             .enumerate()
             .map(|(i, c)| {
                 let mut item = ListItem::new(c.as_str());
-                if self.selected_channels.contains(&i) {
+                if self.selected_artists.contains(&i) {
                     item = item.style(ctx.config.theme.highlighted_item_style.reversed());
                 }
                 item
             })
             .collect();
-        let channel_list = List::new(channel_items)
-            .block(channels_block)
+        let artist_list = List::new(artist_items)
+            .block(artists_block)
             .highlight_style(ctx.config.theme.highlighted_item_style);
-        frame.render_stateful_widget(channel_list, columns[1], &mut self.channel_list_state);
+        frame.render_stateful_widget(artist_list, columns[1], &mut self.artist_list_state);
 
-        // --- Column 3: Library Videos / Preview ---
-        match self.library_video_focus {
-            LibraryVideoFocus::List => {
-                let videos_block = Block::default()
+        // --- Column 3: Library Songs / Preview ---
+        match self.library_song_focus {
+            LibrarySongFocus::List => {
+                let songs_block = Block::default()
                     .borders(Borders::ALL)
                     .title("Library: Tracks")
-                    .border_style(if self.focus == Focus::LibraryVideos {
+                    .border_style(if self.focus == Focus::LibrarySongs {
                         ctx.config.as_focused_border_style()
                     } else {
                         ctx.config.as_border_style()
                     });
-                let video_items: Vec<ListItem> = self
-                    .get_selected_channel()
-                    .and_then(|c| self.videos_by_channel.get(c))
-                    .map(|videos| {
-                        videos
+                let song_items: Vec<ListItem> = self
+                    .get_selected_artist()
+                    .and_then(|c| self.songs_by_artist.get(c))
+                    .map(|songs| {
+                        songs
                             .iter()
                             .enumerate()
                             .map(|(i, v)| {
                                 let mut item = ListItem::new(v.title.as_str());
                                 let is_selected = self
-                                    .get_selected_channel()
-                                    .and_then(|c| self.selected_videos.get(c))
+                                    .get_selected_artist()
+                                    .and_then(|c| self.selected_songs.get(c))
                                     .map_or(false, |s| s.contains(&i));
                                 if is_selected {
                                     item = item.style(
@@ -817,27 +817,27 @@ impl Pane for YouTubePane {
                             .collect()
                     })
                     .unwrap_or_default();
-                let video_list = List::new(video_items)
-                    .block(videos_block)
+                let song_list = List::new(song_items)
+                    .block(songs_block)
                     .highlight_style(ctx.config.theme.highlighted_item_style);
-                frame.render_stateful_widget(video_list, columns[2], &mut self.video_list_state);
+                frame.render_stateful_widget(song_list, columns[2], &mut self.song_list_state);
             }
-            LibraryVideoFocus::Preview => {
+            LibrarySongFocus::Preview => {
                 let preview_block = Block::default()
                     .borders(Borders::ALL)
                     .title("Preview")
                     .border_style(ctx.config.as_focused_border_style());
 
-                let preview_data = self.get_selected_video().map(|video| {
+                let preview_data = self.get_selected_song().map(|song| {
                     let key_style = ctx.config.theme.preview_label_style;
                     let group_style = ctx.config.theme.preview_metadata_group_style;
-                    video.to_song_for_preview().to_preview(key_style, group_style)
+                    song.to_song_for_preview().to_preview(key_style, group_style)
                 });
 
                 if let Some(data) = preview_data {
                     render_preview_data(frame, columns[2], &data, preview_block);
                 } else {
-                    let preview_widget = Paragraph::new("No video selected")
+                    let preview_widget = Paragraph::new("No song selected")
                         .block(preview_block)
                         .wrap(Wrap { trim: false });
                     frame.render_widget(preview_widget, columns[2]);
@@ -852,8 +852,8 @@ impl Pane for YouTubePane {
         match self.focus {
             Focus::SearchInput => self.handle_search_input_action(event, ctx)?,
             Focus::SearchResults => self.handle_search_results_action(event, ctx)?,
-            Focus::LibraryChannels => self.handle_library_channels_action(event, ctx)?,
-            Focus::LibraryVideos => self.handle_library_videos_action(event, ctx)?,
+            Focus::LibraryArtists => self.handle_library_artists_action(event, ctx)?,
+            Focus::LibrarySongs => self.handle_library_songs_action(event, ctx)?,
         }
         ctx.render()?;
         Ok(())
@@ -874,10 +874,10 @@ impl Pane for YouTubePane {
                     self.focus = Focus::SearchInput;
                 } else if self.search_results_area.contains(pos) {
                     self.focus = Focus::SearchResults;
-                } else if self.library_channels_area.contains(pos) {
-                    self.focus = Focus::LibraryChannels;
-                } else if self.library_videos_area.contains(pos) {
-                    self.focus = Focus::LibraryVideos;
+                } else if self.library_artists_area.contains(pos) {
+                    self.focus = Focus::LibraryArtists;
+                } else if self.library_songs_area.contains(pos) {
+                    self.focus = Focus::LibrarySongs;
                 }
                 ctx.app_event_sender.send(AppEvent::RequestRender)?;
             }
@@ -889,44 +889,44 @@ impl Pane for YouTubePane {
                 // Ne rien faire si le clic est en dehors de la zone de recherche
             }
             MouseEventKind::RightClick => {
-                if self.library_videos_area.contains(pos) {
-                    self.focus = Focus::LibraryVideos;
-                    if let Some(channel_name) = self.get_selected_channel().map(|c| c.to_owned()) {
-                        let clicked_row = pos.y.saturating_sub(self.library_videos_area.y + 1);
-                        let clicked_idx = self.video_list_state.offset() + clicked_row as usize;
+                if self.library_songs_area.contains(pos) {
+                    self.focus = Focus::LibrarySongs;
+                    if let Some(artist_name) = self.get_selected_artist().map(|c| c.to_owned()) {
+                        let clicked_row = pos.y.saturating_sub(self.library_songs_area.y + 1);
+                        let clicked_idx = self.song_list_state.offset() + clicked_row as usize;
 
-                        let selections = self.selected_videos.entry(channel_name.clone()).or_default();
+                        let selections = self.selected_songs.entry(artist_name.clone()).or_default();
                         if !selections.contains(&clicked_idx) {
                             selections.clear();
                         }
                         selections.insert(clicked_idx);
-                        self.video_list_state.select(Some(clicked_idx));
+                        self.song_list_state.select(Some(clicked_idx));
 
-                        let videos = self.videos_by_channel.get(&channel_name).unwrap();
-                        let selected_videos: Vec<_> = selections.iter().filter_map(|i| videos.get(*i).cloned()).collect();
+                        let songs = self.songs_by_artist.get(&artist_name).unwrap();
+                        let selected_songs: Vec<_> = selections.iter().filter_map(|i| songs.get(*i).cloned()).collect();
 
-                        self.show_youtube_context_menu(selected_videos, ctx)?;
+                        self.show_youtube_context_menu(selected_songs, ctx)?;
                     }
-                } else if self.library_channels_area.contains(pos) {
-                    self.focus = Focus::LibraryChannels;
-                    let clicked_row = pos.y.saturating_sub(self.library_channels_area.y + 1);
-                    let clicked_idx = self.channel_list_state.offset() + clicked_row as usize;
+                } else if self.library_artists_area.contains(pos) {
+                    self.focus = Focus::LibraryArtists;
+                    let clicked_row = pos.y.saturating_sub(self.library_artists_area.y + 1);
+                    let clicked_idx = self.artist_list_state.offset() + clicked_row as usize;
 
-                    if !self.selected_channels.contains(&clicked_idx) {
-                        self.selected_channels.clear();
-                        self.selected_videos.clear();
+                    if !self.selected_artists.contains(&clicked_idx) {
+                        self.selected_artists.clear();
+                        self.selected_songs.clear();
                     }
-                    self.selected_channels.insert(clicked_idx);
-                    self.channel_list_state.select(Some(clicked_idx));
+                    self.selected_artists.insert(clicked_idx);
+                    self.artist_list_state.select(Some(clicked_idx));
 
-                    let selected_videos: Vec<_> = self.selected_channels.iter()
-                        .filter_map(|i| self.channels.get(*i))
-                        .filter_map(|c| self.videos_by_channel.get(c))
+                    let selected_songs: Vec<_> = self.selected_artists.iter()
+                        .filter_map(|i| self.artists.get(*i))
+                        .filter_map(|c| self.songs_by_artist.get(c))
                         .flatten()
                         .cloned()
                         .collect();
                     
-                    self.show_youtube_context_menu(selected_videos, ctx)?;
+                    self.show_youtube_context_menu(selected_songs, ctx)?;
                 }
             }
             _ => {}

@@ -67,10 +67,10 @@ impl DataStore {
                         song_id     INTEGER PRIMARY KEY,
                         youtube_id  TEXT NOT NULL
                     );
-                    CREATE TABLE IF NOT EXISTS videos (
+                    CREATE TABLE IF NOT EXISTS youtube_songs (
                         youtube_id      TEXT PRIMARY KEY NOT NULL,
                         title           TEXT NOT NULL,
-                        channel         TEXT NOT NULL,
+                        artist          TEXT NOT NULL,
                         album           TEXT,
                         duration_secs   INTEGER NOT NULL,
                         thumbnail_url   TEXT
@@ -82,12 +82,12 @@ impl DataStore {
                     CREATE TABLE IF NOT EXISTS playlist_items (
                         playlist_id         INTEGER NOT NULL,
                         position            INTEGER NOT NULL,
-                        video_youtube_id    TEXT,
+                        song_youtube_id    TEXT,
                         file_path           TEXT,
                         PRIMARY KEY (playlist_id, position),
                         FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-                        FOREIGN KEY (video_youtube_id) REFERENCES videos(youtube_id) ON DELETE CASCADE,
-                        CHECK (video_youtube_id IS NOT NULL OR file_path IS NOT NULL)
+                        FOREIGN KEY (song_youtube_id) REFERENCES youtube_songs(youtube_id) ON DELETE CASCADE,
+                        CHECK (song_youtube_id IS NOT NULL OR file_path IS NOT NULL)
                     );
                     ",
             )?;
@@ -122,7 +122,7 @@ impl DataStore {
 
     // --- Queue Metadata ---
 
-    /// Associates a MPD queue song ID with a YouTube video ID.
+    /// Associates a MPD queue song ID with a YouTube song ID.
     ///
     /// If a mapping for the `song_id` already exists, it will be replaced.
     pub fn add_youtube_song_to_queue(
@@ -137,7 +137,7 @@ impl DataStore {
         Ok(())
     }
 
-    /// Retrieves the YouTube video ID and its update timestamp for a given MPD queue song ID.
+    /// Retrieves the YouTube song ID and its update timestamp for a given MPD queue song ID.
     pub fn get_youtube_id_for_song(
         &self,
         song_id: u32,
@@ -182,9 +182,9 @@ impl DataStore {
         Ok(())
     }
 
-    /// Returns a set of all YouTube video IDs currently in the queue.
+    /// Returns a set of all YouTube song IDs currently in the queue.
     ///
-    /// This is useful for checking for duplicates before adding a new video.
+    /// This is useful for checking for duplicates before adding a new song.
     pub fn get_all_queue_youtube_ids(&self) -> Result<HashSet<String>, DataStoreError> {
         let conn = self.conn.borrow();
         let mut stmt = conn.prepare("SELECT youtube_id FROM queue_youtube_metadata")?;
@@ -208,7 +208,7 @@ impl DataStore {
         Ok(result)
     }
 
-    /// Returns a map of all MPD song IDs to YouTube video IDs.
+    /// Returns a map of all MPD song IDs to YouTube song IDs.
     pub fn get_all_queue_youtube_mappings(
         &self,
     ) -> Result<HashMap<u32, String>, DataStoreError> {
@@ -254,63 +254,63 @@ impl DataStore {
 
     // --- Library Management ---
 
-    /// Adds a YouTube video to the library.
+    /// Adds a YouTube song to the library.
     ///
-    /// If a video with the same `youtube_id` already exists, it will be replaced.
-    pub fn add_video_to_library(&self, video: &models::YouTubeVideo) -> Result<(), DataStoreError> {
+    /// If a song with the same `youtube_id` already exists, it will be replaced.
+    pub fn add_song_to_library(&self, song: &models::YouTubeSong) -> Result<(), DataStoreError> {
         self.conn.borrow().execute(
             "
-            INSERT OR REPLACE INTO videos (youtube_id, title, channel, album, duration_secs, thumbnail_url)
+            INSERT OR REPLACE INTO songs (youtube_id, title, artist, album, duration_secs, thumbnail_url)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ",
             (
-                &video.youtube_id,
-                &video.title,
-                &video.channel,
-                &video.album,
-                &video.duration_secs,
-                &video.thumbnail_url,
+                &song.youtube_id,
+                &song.title,
+                &song.artist,
+                &song.album,
+                &song.duration_secs,
+                &song.thumbnail_url,
             ),
         )?;
         Ok(())
     }
 
-    /// Removes a YouTube video from the library.
-    pub fn remove_video_from_library(&self, youtube_id: &str) -> Result<(), DataStoreError> {
+    /// Removes a YouTube song from the library.
+    pub fn remove_song_from_library(&self, youtube_id: &str) -> Result<(), DataStoreError> {
         self.conn
             .borrow()
-            .execute("DELETE FROM videos WHERE youtube_id = ?1", [youtube_id])?;
+            .execute("DELETE FROM songs WHERE youtube_id = ?1", [youtube_id])?;
         Ok(())
     }
 
-    /// Retrieves all YouTube videos from the library.
-    pub fn get_all_library_videos(&self) -> Result<Vec<models::YouTubeVideo>, DataStoreError> {
+    /// Retrieves all YouTube songs from the library.
+    pub fn get_all_library_songs(&self) -> Result<Vec<models::YouTubeSong>, DataStoreError> {
         let conn = self.conn.borrow();
         let mut stmt = conn.prepare(
             "
-            SELECT youtube_id, title, channel, album, duration_secs, thumbnail_url
-            FROM videos
+            SELECT youtube_id, title, artist, album, duration_secs, thumbnail_url
+            FROM songs
             ORDER BY title
         ",
         )?;
 
-        let videos_iter = stmt.query_map([], |row| {
-            Ok(models::YouTubeVideo {
+        let songs_iter = stmt.query_map([], |row| {
+            Ok(models::YouTubeSong {
                 youtube_id: row.get(0)?,
                 title: row.get(1)?,
-                channel: row.get(2)?,
+                artist: row.get(2)?,
                 album: row.get(3)?,
                 duration_secs: row.get(4)?,
                 thumbnail_url: row.get(5)?,
             })
         })?;
 
-        let mut videos = Vec::new();
-        for video in videos_iter {
-            videos.push(video?);
+        let mut songs = Vec::new();
+        for song in songs_iter {
+            songs.push(song?);
         }
 
-        Ok(videos)
+        Ok(songs)
     }
 
     // --- Playlist Management ---
@@ -389,12 +389,12 @@ impl DataStore {
                 pi.file_path,
                 v.youtube_id,
                 v.title,
-                v.channel,
+                v.artist,
                 v.album,
                 v.duration_secs,
                 v.thumbnail_url
             FROM playlist_items pi
-            LEFT JOIN videos v ON pi.video_youtube_id = v.youtube_id
+            LEFT JOIN songs v ON pi.song_youtube_id = v.youtube_id
             WHERE pi.playlist_id = ?1
             ORDER BY pi.position
             ",
@@ -406,10 +406,10 @@ impl DataStore {
                 return Ok(models::PlaylistItem::Local(path));
             }
 
-            Ok(models::PlaylistItem::YouTube(models::YouTubeVideo {
+            Ok(models::PlaylistItem::YouTube(models::YouTubeSong {
                 youtube_id: row.get(1)?,
                 title: row.get(2)?,
-                channel: row.get(3)?,
+                artist: row.get(3)?,
                 album: row.get(4)?,
                 duration_secs: row.get(5)?,
                 thumbnail_url: row.get(6)?,
@@ -423,8 +423,8 @@ impl DataStore {
         Ok(items)
     }
 
-    /// Adds a YouTube video to the end of a playlist.
-    pub fn add_youtube_video_to_playlist(
+    /// Adds a YouTube song to the end of a playlist.
+    pub fn add_youtube_song_to_playlist(
         &self,
         playlist_id: i64,
         youtube_id: &str,
@@ -458,7 +458,7 @@ impl DataStore {
         )?;
 
         tx.execute(
-            "INSERT INTO playlist_items (playlist_id, position, video_youtube_id, file_path) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO playlist_items (playlist_id, position, song_youtube_id, file_path) VALUES (?1, ?2, ?3, ?4)",
             (playlist_id, position, youtube_id, file_path),
         )?;
 

@@ -12,7 +12,7 @@ use ratatui::{
 use anyhow::Context as _;
 use crate::{
     config::keys::actions::AddOpts,
-    core::data_store::models::{PlaylistItem, YouTubeVideo},
+    core::data_store::models::{PlaylistItem, YouTubeSong},
     ctx::Ctx,
     shared::{
         events::AppEvent,
@@ -421,19 +421,19 @@ pub fn playlist_queue_actions(
 }
 
 pub fn youtube_library_actions(
-    videos: Vec<YouTubeVideo>,
+    songs: Vec<YouTubeSong>,
 ) -> impl FnOnce(ListSection) -> Option<ListSection> {
     move |section| {
         Some(section.item("Remove from library", move |ctx| {
             let modal = modal::MenuModal::new(ctx)
                 .list_section(ctx, |s| {
                     Some(
-                        s.item(format!("Yes, remove {} item(s)", videos.len()), {
-                            let videos = videos.clone();
+                        s.item(format!("Yes, remove {} item(s)", songs.len()), {
+                            let songs = songs.clone();
                             move |ctx| {
-                                for video in videos {
+                                for song in songs {
                                     ctx.app_event_sender.send(AppEvent::UiEvent(
-                                        UiAppEvent::YouTubeLibraryRemoveVideo(video.youtube_id),
+                                        UiAppEvent::YouTubeLibraryRemoveSong(song.youtube_id),
                                     ))?;
                                 }
                                 Ok(())
@@ -526,10 +526,10 @@ pub fn playlist_cloning_actions(
                                         ctx.data_store
                                             .add_local_file_to_playlist(new_playlist_id, &path)?;
                                     }
-                                    PlaylistItem::YouTube(video) => {
-                                        ctx.data_store.add_youtube_video_to_playlist(
+                                    PlaylistItem::YouTube(song) => {
+                                        ctx.data_store.add_youtube_song_to_playlist(
                                             new_playlist_id,
-                                            &video.youtube_id,
+                                            &song.youtube_id,
                                         )?;
                                     }
                                 }

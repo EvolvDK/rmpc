@@ -8,7 +8,7 @@ use ratatui::{style::Style, text::Line};
 use super::{events::AppEvent, mpd_client_ext::PartitionedOutput};
 use crate::{
     config::tabs::PaneType,
-    core::data_store::models::YouTubeVideo,
+    core::data_store::models::YouTubeSong,
     mpd::{
         client::Client,
         commands::{Decoder, IdleEvent, Song, Status, Volume},
@@ -101,7 +101,7 @@ pub(crate) enum MpdQueryResult {
     Volume(Volume),
     Outputs(Vec<PartitionedOutput>),
     Decoders(Vec<Decoder>),
-    YouTubeSongAdded { song_id: u32, video: YouTubeVideo },
+    YouTubeSongAdded { song_id: u32, song: YouTubeSong },
     ExternalCommand(Arc<Vec<String>>, Vec<Song>),
     Any(Box<dyn Any + Send + Sync>),
 }

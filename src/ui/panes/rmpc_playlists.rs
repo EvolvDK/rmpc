@@ -11,7 +11,7 @@ use ratatui::{
 
 use crate::{
     config::{keys::CommonAction, tabs::PaneType},
-    core::data_store::models::{PlaylistItem, Playlist, YouTubeVideo},
+    core::data_store::models::{PlaylistItem, Playlist, YouTubeSong},
     ctx::Ctx,
     mpd::mpd_client::{Filter, MpdClient, Tag},
     shared::{
@@ -44,7 +44,7 @@ impl Default for Focus {
 #[derive(Debug, Default)]
 pub struct RmpcPlaylistsPane {
     playlists: Vec<crate::core::data_store::models::Playlist>,
-    youtube_library: HashMap<String, YouTubeVideo>,
+    youtube_library: HashMap<String, YouTubeSong>,
     playlist_list_state: ListState,
     content_list_state: ListState,
     selected_content_indices: BTreeSet<usize>,
@@ -59,8 +59,8 @@ const PREVIEW: &str = "rmpc_playlist_preview";
 impl RmpcPlaylistsPane {
     pub fn new(ctx: &Ctx) -> Result<Self> {
         let playlists = ctx.data_store.get_all_playlists()?;
-        let youtube_library_vec = ctx.data_store.get_all_library_videos()?;
-        let youtube_library: HashMap<String, YouTubeVideo> = youtube_library_vec
+        let youtube_library_vec = ctx.data_store.get_all_library_songs()?;
+        let youtube_library: HashMap<String, YouTubeSong> = youtube_library_vec
             .into_iter()
             .map(|v| (v.youtube_id.clone(), v))
             .collect();
@@ -82,12 +82,12 @@ impl RmpcPlaylistsPane {
         Ok(pane)
     }
 
-    pub fn add_video(&mut self, video: &YouTubeVideo) {
-        self.youtube_library.insert(video.youtube_id.clone(), video.clone());
+    pub fn add_song(&mut self, song: &YouTubeSong) {
+        self.youtube_library.insert(song.youtube_id.clone(), song.clone());
     }
 
-    pub fn remove_video(&mut self, video_id: &str) {
-        self.youtube_library.remove(video_id);
+    pub fn remove_song(&mut self, song_id: &str) {
+        self.youtube_library.remove(song_id);
     }
 
 
@@ -99,10 +99,10 @@ impl RmpcPlaylistsPane {
 
         if let Some(item) = self.get_highlighted_content_item() {
             match item {
-                PlaylistItem::YouTube(video) => {
-                    if let Some(video) = self.youtube_library.get(&video.youtube_id) {
+                PlaylistItem::YouTube(song) => {
+                    if let Some(song) = self.youtube_library.get(&song.youtube_id) {
                         self.preview_data =
-                            Some(video.to_song_for_preview().to_preview(key_style, group_style));
+                            Some(song.to_song_for_preview().to_preview(key_style, group_style));
                     }
                 }
                 PlaylistItem::Local(path) => {
@@ -242,7 +242,7 @@ impl Pane for RmpcPlaylistsPane {
                 ctx.config.as_border_style()
             });
 
-        let library_videos: std::collections::HashMap<String, &YouTubeVideo> =
+        let library_songs: std::collections::HashMap<String, &YouTubeSong> =
             self.youtube_library.iter().map(|(id, v)| (id.clone(), v)).collect();
 
         let content_items: Vec<ListItem> = self
@@ -253,10 +253,10 @@ impl Pane for RmpcPlaylistsPane {
             .enumerate()
             .map(|(i, item)| {
                 let line = match item {
-                    PlaylistItem::YouTube(video) => {
-                        let title = library_videos
-                            .get(&video.youtube_id)
-                            .map_or("Unknown YouTube Video", |v| &v.title);
+                    PlaylistItem::YouTube(song) => {
+                        let title = library_songs
+                            .get(&song.youtube_id)
+                            .map_or("Unknown YouTube Song", |v| &v.title);
                         format!("[YT] {}", title)
                     }
                     PlaylistItem::Local(path) => {
@@ -289,11 +289,11 @@ impl Pane for RmpcPlaylistsPane {
         } else {
             let preview_text = if let Some(item) = self.get_highlighted_content_item() {
                 match item {
-                    PlaylistItem::YouTube(video) => {
-                        if self.youtube_library.contains_key(&video.youtube_id) {
+                    PlaylistItem::YouTube(song) => {
+                        if self.youtube_library.contains_key(&song.youtube_id) {
                             "Loading preview...".to_string()
                         } else {
-                            "Could not find video info in library.".to_string()
+                            "Could not find song info in library.".to_string()
                         }
                     }
                     PlaylistItem::Local(_) => "Loading preview...".to_string(),

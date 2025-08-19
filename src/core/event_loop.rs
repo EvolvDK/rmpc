@@ -241,8 +241,8 @@ fn main_task<B: Backend + std::io::Write>(
                     render_wanted = true;
                 }
                 AppEvent::WorkDone(Ok(result)) => match result {
-                    WorkDone::YouTubeSearchResult { video_info, generation } => {
-                        if let Err(err) = ui.on_youtube_search_result(video_info, generation, &mut ctx) {
+                    WorkDone::YouTubeSearchResult { song_info, generation } => {
+                        if let Err(err) = ui.on_youtube_search_result(song_info, generation, &mut ctx) {
                             log::error!(error:? = err; "UI failed to handle youtube search result event");
                         }
                     }
@@ -251,35 +251,35 @@ fn main_task<B: Backend + std::io::Write>(
                             log::error!(error:? = err; "UI failed to handle youtube search complete event");
                         }
                     }
-                    WorkDone::YouTubeStreamUrlReady { url, video, context } => {
-                        if let Err(err) = ui.on_youtube_stream_url_ready(url, video, context, &mut ctx) {
+                    WorkDone::YouTubeStreamUrlReady { url, song, context } => {
+                        if let Err(err) = ui.on_youtube_stream_url_ready(url, song, context, &mut ctx) {
                             log::error!(error:? = err; "UI failed to handle youtube stream url ready event");
                         }
                     }
-                    WorkDone::YouTubeStreamUrlFailed { video, context } => {
-                        if let Err(err) = ui.on_youtube_stream_url_failed(video, context, &mut ctx) {
+                    WorkDone::YouTubeStreamUrlFailed { song, context } => {
+                        if let Err(err) = ui.on_youtube_stream_url_failed(song, context, &mut ctx) {
                             log::error!(error:? = err; "UI failed to handle youtube stream url failed event");
                         }
                     }
-                    WorkDone::YouTubeVideoInfoFetched(video) => {
-                        if let Err(err) = ui.on_youtube_video_info_fetched(video, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle youtube video info fetched event");
+                    WorkDone::YouTubeSongInfoFetched(song) => {
+                        if let Err(err) = ui.on_youtube_song_info_fetched(song, &mut ctx) {
+                            log::error!(error:? = err; "UI failed to handle youtube song info fetched event");
                         }
                     }
                     WorkDone::YouTubeStreamRefreshed {
                         new_url,
-                        video,
+                        song,
                         old_song_id,
                         position,
                     } => {
                         if let Err(err) =
-                            ui.on_youtube_stream_refreshed(new_url, video, old_song_id, position, &mut ctx)
+                            ui.on_youtube_stream_refreshed(new_url, song, old_song_id, position, &mut ctx)
                         {
                             log::error!(error:? = err; "UI failed to handle youtube stream refreshed event");
                         }
                     }
-                    WorkDone::YouTubeStreamRefreshFailed { video_title } => {
-                        status_error!("Failed to refresh stream for '{}'.", video_title);
+                    WorkDone::YouTubeStreamRefreshFailed { song_title } => {
+                        status_error!("Failed to refresh stream for '{}'.", song_title);
                         if ctx.status.state == State::Play {
                             ctx.command(|client| {
                                 client.next()?;
@@ -668,12 +668,12 @@ fn handle_youtube_stream_error(err: &anyhow::Error, ctx: &mut Ctx) -> bool {
             if let (Some(song_id), Some(pos)) = (ctx.status.songid, ctx.status.song) {
                 if let Ok(Some((youtube_id, _))) = ctx.data_store.get_youtube_id_for_song(song_id)
                 {
-                    if let Some(video) = ctx.youtube_library.get(&youtube_id).cloned() {
+                    if let Some(song) = ctx.youtube_library.get(&youtube_id).cloned() {
                         try_skip!(
                             ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
                                 old_song_id: song_id,
                                 position: pos,
-                                video,
+                                song,
                             }),
                             "Failed to send YouTube stream refresh request"
                         );

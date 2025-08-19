@@ -63,18 +63,18 @@ impl KeyValues {
         if let Ok(Some((youtube_id, updated_at))) =
             ctx.data_store.get_youtube_id_for_song(song.id)
         {
-            if let Some(video_info) = ctx.youtube_library.get(&youtube_id) {
+            if let Some(song_info) = ctx.youtube_library.get(&youtube_id) {
                 result.push(KeyValue {
                     key: "Title".to_owned(),
-                    value: video_info.title.clone(),
+                    value: song_info.title.clone(),
                 });
                 result.push(KeyValue {
                     key: "Artist".to_owned(),
-                    value: video_info.channel.clone(),
+                    value: song_info.artist.clone(),
                 });
                 result.push(KeyValue {
                     key: "Duration".to_owned(),
-                    value: Duration::from_secs(video_info.duration_secs as u64).to_string(),
+                    value: Duration::from_secs(song_info.duration_secs as u64).to_string(),
                 });
             }
             result.push(KeyValue {
