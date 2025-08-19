@@ -359,21 +359,22 @@ impl YouTubePane {
     }
 
     fn handle_search_input_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
-        let modifiers = event.inner().modifiers;
-        if let KeyCode::Char('m') = event.code() {
-            if modifiers == KeyModifiers::CONTROL {
+        match (event.code(), event.inner().modifiers) {
+            (KeyCode::Char('m'), KeyModifiers::CONTROL) => {
                 self.search_mode = self.search_mode.next();
                 self.filter_search_results();
                 event.stop_propagation();
                 ctx.render()?;
                 return Ok(());
-            } else if modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) {
+            }
+            (KeyCode::Char('M'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
                 self.search_mode = self.search_mode.previous();
                 self.filter_search_results();
                 event.stop_propagation();
                 ctx.render()?;
                 return Ok(());
             }
+            _ => {}
         }
         match event.code() {
             KeyCode::Enter => {
@@ -696,7 +697,12 @@ impl Pane for YouTubePane {
             } else {
                 ctx.config.as_border_style()
             });
-        let input_widget = Paragraph::new(self.search_input.value()).block(input_block);
+
+        let scroll =
+            self.search_input.visual_scroll(search_layout[0].width.saturating_sub(2) as usize);
+        let input_widget =
+            Paragraph::new(self.search_input.value()).scroll((0, scroll as u16)).block(input_block);
+
         frame.render_widget(input_widget, search_layout[0]);
         if self.focus == Focus::SearchInput {
             frame.set_cursor_position((
@@ -852,6 +858,13 @@ impl Pane for YouTubePane {
                     self.focus = Focus::LibraryVideos;
                 }
                 ctx.app_event_sender.send(AppEvent::RequestRender)?;
+            }
+            MouseEventKind::MiddleClick => {
+                if self.search_input_area.contains(pos) {
+                    self.focus = Focus::SearchInput;
+                    ctx.app_event_sender.send(AppEvent::RequestRender)?;
+                }
+                // Ne rien faire si le clic est en dehors de la zone de recherche
             }
             MouseEventKind::RightClick => {
                 if self.library_videos_area.contains(pos) {
