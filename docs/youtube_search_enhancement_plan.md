@@ -35,9 +35,9 @@ Le socle de la fonctionnalité. Il s'agit de mettre en place la mécanique de re
 
 Rendre le mode de recherche actuel visible et interactif pour l'utilisateur.
 
--   **Action 2.1 : Afficher le mode dans le champ de recherche**
-    -   Modifier le widget de saisie de la recherche (`Input`) pour qu'il affiche le nom du mode de recherche actuel entre crochets, avant le texte de la requête.
-    -   Exemple : `[Fuzzy] Votre recherche...`
+-   **Action 2.1 : Afficher le mode dans la bordure du widget de recherche**
+    -   Modifier le widget de recherche pour afficher le mode de recherche actuel dans le titre de sa bordure.
+    -   Exemple : Le titre de la bordure deviendrait `Search Query [Fuzzy]`.
 
 -   **Action 2.2 : Gérer le clic sur l'indicateur de mode**
     -   Rendre la zone de l'indicateur de mode (ex: `[Fuzzy]`) cliquable.
