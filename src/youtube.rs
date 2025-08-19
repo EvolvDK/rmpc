@@ -27,12 +27,9 @@ pub(crate) struct YtDlpVideoInfo {
     // Champs pour le mappage prioritaire
     track: Option<String>,
     artist: Option<String>,
-    artists: Option<Vec<String>>,
     album: Option<String>,
     album_artist: Option<String>,
-    album_artists: Option<Vec<String>>,
     creator: Option<String>,
-    creators: Option<Vec<String>>,
     uploader: Option<String>,
     uploader_id: Option<String>,
     fulltitle: Option<String>,

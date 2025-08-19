@@ -134,6 +134,8 @@ impl std::fmt::Debug for YouTubePane {
     }
 }
 
+const CTRL_ALT: KeyModifiers = KeyModifiers::CONTROL.union(KeyModifiers::ALT);
+
 impl YouTubePane {
     pub fn new(ctx: &Ctx) -> Result<Self> {
         let videos = ctx.data_store.get_all_library_videos()?;
@@ -358,41 +360,51 @@ impl YouTubePane {
         Ok(ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?)
     }
 
-    fn handle_search_input_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
-        let code = event.code();
-        let modifiers = event.inner().modifiers;
-
-        // Gère Ctrl+M pour le mode suivant et Ctrl+Shift+M pour le précédent
-        if let KeyCode::Char(c) = code {
-            if c.to_ascii_lowercase() == 'm' && modifiers.contains(KeyModifiers::CONTROL) {
-                if modifiers.contains(KeyModifiers::SHIFT)
-                    || (c == 'M' && !modifiers.contains(KeyModifiers::SHIFT))
-                {
-                    // Mode précédent pour:
-                    // - Ctrl+Shift+m/M
-                    // - Ctrl+M (majuscule, implique shift, mais le modificateur n'est pas envoyé)
-                    self.search_mode = self.search_mode.previous();
-                } else {
-                    // Mode suivant pour Ctrl+m (minuscule)
-                    self.search_mode = self.search_mode.next();
-                }
-                self.filter_search_results();
-                event.stop_propagation();
-                ctx.render()?;
-                return Ok(());
+    fn handle_search_mode_cycle(&mut self, key_event: &crossterm::event::KeyEvent) -> bool {
+        match (key_event.code, key_event.modifiers) {
+            // Ctrl+Alt+F (both cases handled in one pattern with exact match)
+            (KeyCode::Char('F' | 'f'), mods) if mods == CTRL_ALT => {
+                self.search_mode = self.search_mode.previous();
+                true
             }
+            // Ctrl+F (uppercase - some terminal behavior)
+            (KeyCode::Char('F'), KeyModifiers::CONTROL) => {
+                self.search_mode = self.search_mode.previous();
+                true
+            }
+            // Ctrl+f (lowercase)
+            (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
+                self.search_mode = self.search_mode.next();
+                true
+            }
+            _ => false,
         }
-        match event.code() {
+    }
+
+    fn handle_search_input_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<(), anyhow::Error> {
+        if self.handle_search_mode_cycle(&event.inner()) {
+            self.filter_search_results();
+            event.stop_propagation();
+            return Ok(ctx.render()?);
+        }
+
+        // Cache the key code to avoid repeated method calls
+        let key_code = event.code();
+
+        match key_code {
             KeyCode::Enter => {
-                let query = self.search_input.value().to_string();
-                if !query.is_empty() {
-                    status_info!("Searching YouTube for: {}", query);
+                // Avoid unnecessary string allocation if empty
+                let input_value = self.search_input.value();
+                if !input_value.is_empty() {
+                    status_info!("Searching YouTube for: {}", input_value);
                     self.search_generation += 1;
                     self.is_loading_search = true;
                     self.raw_search_results.clear();
                     self.filter_search_results();
+
+                    // Only clone/allocate string when actually needed
                     ctx.work_sender.send(WorkRequest::YouTubeSearch {
-                        query,
+                        query: input_value.to_string(),
                         generation: self.search_generation,
                     })?;
                 }
@@ -403,11 +415,14 @@ impl YouTubePane {
                 }
             }
             _ => {
-                if self.search_input.handle_event(&Event::Key(event.inner())).is_some() {
+                // Cache the event inner to avoid repeated calls
+                let inner_event = event.inner();
+
+                if self.search_input.handle_event(&Event::Key(inner_event)).is_some() {
                     self.filter_search_results();
                     event.stop_propagation();
                     ctx.render()?;
-                } else if let KeyCode::Right = event.code() {
+                } else if matches!(key_code, KeyCode::Right) {
                     self.focus = Focus::LibraryChannels;
                 }
             }
@@ -705,7 +720,7 @@ impl Pane for YouTubePane {
             });
 
         let scroll =
-            self.search_input.visual_scroll(search_layout[0].width.saturating_sub(2) as usize);
+            self.search_input.visual_scroll(search_layout[0].width.saturating_sub(3) as usize);
         let input_widget =
             Paragraph::new(self.search_input.value()).scroll((0, scroll as u16)).block(input_block);
 
