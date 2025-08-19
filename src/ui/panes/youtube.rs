@@ -364,7 +364,7 @@ impl YouTubePane {
         match (key_event.code, key_event.modifiers) {
             // `Ctrl+Shift+F` cycles backwards.
             // Accommodates terminals that send `F` or `f` with `SHIFT`.
-            (KeyCode::Char('F' | 'f'), mods) if mods == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
+            (KeyCode::Char('F' | 'f'), mods) if mods == CTRL_ALT => {
                 self.search_mode = self.search_mode.previous();
                 true
             }
