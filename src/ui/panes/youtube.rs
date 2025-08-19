@@ -362,17 +362,18 @@ impl YouTubePane {
 
     fn handle_search_mode_cycle(&mut self, key_event: &crossterm::event::KeyEvent) -> bool {
         match (key_event.code, key_event.modifiers) {
-            // Ctrl+Alt+F (both cases handled in one pattern with exact match)
-            (KeyCode::Char('F' | 'f'), mods) if mods == CTRL_ALT => {
+            // `Ctrl+Shift+F` cycles backwards.
+            // Accommodates terminals that send `F` or `f` with `SHIFT`.
+            (KeyCode::Char('F' | 'f'), mods) if mods == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
                 self.search_mode = self.search_mode.previous();
                 true
             }
-            // Ctrl+F (uppercase - some terminal behavior)
+            // Accommodates terminals that send `Ctrl+Shift+...` as an uppercase char with only `CONTROL`.
             (KeyCode::Char('F'), KeyModifiers::CONTROL) => {
                 self.search_mode = self.search_mode.previous();
                 true
             }
-            // Ctrl+f (lowercase)
+            // `Ctrl+f` cycles forwards.
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => {
                 self.search_mode = self.search_mode.next();
                 true
@@ -393,18 +394,16 @@ impl YouTubePane {
 
         match key_code {
             KeyCode::Enter => {
-                // Avoid unnecessary string allocation if empty
-                let input_value = self.search_input.value();
+                let input_value = self.search_input.value().to_string();
                 if !input_value.is_empty() {
-                    status_info!("Searching YouTube for: {}", input_value);
+                    status_info!("Searching YouTube for: {}", &input_value);
                     self.search_generation += 1;
                     self.is_loading_search = true;
                     self.raw_search_results.clear();
                     self.filter_search_results();
 
-                    // Only clone/allocate string when actually needed
                     ctx.work_sender.send(WorkRequest::YouTubeSearch {
-                        query: input_value.to_string(),
+                        query: input_value,
                         generation: self.search_generation,
                     })?;
                 }
@@ -726,10 +725,12 @@ impl Pane for YouTubePane {
 
         frame.render_widget(input_widget, search_layout[0]);
         if self.focus == Focus::SearchInput {
-            frame.set_cursor(
-                search_layout[0].x + (self.search_input.visual_cursor() - scroll) as u16 + 1,
-                search_layout[0].y + 1,
-            );
+            frame.set_cursor_position(Rect {
+                x: search_layout[0].x + (self.search_input.visual_cursor() - scroll) as u16 + 1,
+                y: search_layout[0].y + 1,
+                width: 1,
+                height: 1,
+            });
         }
 
         let results_title =
