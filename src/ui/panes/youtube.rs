@@ -359,22 +359,28 @@ impl YouTubePane {
     }
 
     fn handle_search_input_action(&mut self, event: &mut KeyEvent, ctx: &mut Ctx) -> Result<()> {
-        match (event.code(), event.inner().modifiers) {
-            (KeyCode::Char('m'), KeyModifiers::CONTROL) => {
-                self.search_mode = self.search_mode.next();
+        let code = event.code();
+        let modifiers = event.inner().modifiers;
+
+        // Gère Ctrl+M pour le mode suivant et Ctrl+Shift+M pour le précédent
+        if let KeyCode::Char(c) = code {
+            if c.to_ascii_lowercase() == 'm' && modifiers.contains(KeyModifiers::CONTROL) {
+                if modifiers.contains(KeyModifiers::SHIFT)
+                    || (c == 'M' && !modifiers.contains(KeyModifiers::SHIFT))
+                {
+                    // Mode précédent pour:
+                    // - Ctrl+Shift+m/M
+                    // - Ctrl+M (majuscule, implique shift, mais le modificateur n'est pas envoyé)
+                    self.search_mode = self.search_mode.previous();
+                } else {
+                    // Mode suivant pour Ctrl+m (minuscule)
+                    self.search_mode = self.search_mode.next();
+                }
                 self.filter_search_results();
                 event.stop_propagation();
                 ctx.render()?;
                 return Ok(());
             }
-            (KeyCode::Char('M'), KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-                self.search_mode = self.search_mode.previous();
-                self.filter_search_results();
-                event.stop_propagation();
-                ctx.render()?;
-                return Ok(());
-            }
-            _ => {}
         }
         match event.code() {
             KeyCode::Enter => {
@@ -705,10 +711,10 @@ impl Pane for YouTubePane {
 
         frame.render_widget(input_widget, search_layout[0]);
         if self.focus == Focus::SearchInput {
-            frame.set_cursor_position((
-                search_layout[0].x + self.search_input.visual_cursor() as u16 + 1,
+            frame.set_cursor(
+                search_layout[0].x + (self.search_input.visual_cursor() - scroll) as u16 + 1,
                 search_layout[0].y + 1,
-            ));
+            );
         }
 
         let results_title =
