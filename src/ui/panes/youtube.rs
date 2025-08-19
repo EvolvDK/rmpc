@@ -11,6 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
+use regex::Regex;
 use tui_input::{backend::crossterm::EventHandler, Input};
 
 use std::time::Duration;
@@ -52,6 +53,38 @@ impl Default for Focus {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SearchMode {
+    #[default]
+    Fuzzy,
+    Contains,
+    StartsWith,
+    Exact,
+    Regex,
+}
+
+impl SearchMode {
+    const MODES: &'static [Self] = &[
+        Self::Fuzzy,
+        Self::Contains,
+        Self::StartsWith,
+        Self::Exact,
+        Self::Regex,
+    ];
+
+    pub fn next(&self) -> Self {
+        let current_index = Self::MODES.iter().position(|&m| m == *self).unwrap_or(0);
+        let next_index = (current_index + 1) % Self::MODES.len();
+        Self::MODES[next_index]
+    }
+
+    pub fn previous(&self) -> Self {
+        let current_index = Self::MODES.iter().position(|&m| m == *self).unwrap_or(0);
+        let prev_index = (current_index + Self::MODES.len() - 1) % Self::MODES.len();
+        Self::MODES[prev_index]
+    }
+}
+
 #[derive(Debug, Default)]
 enum LibraryVideoFocus {
     #[default]
@@ -63,6 +96,7 @@ pub struct YouTubePane {
     focus: Focus,
     library_video_focus: LibraryVideoFocus,
     // Search state
+    search_mode: SearchMode,
     search_generation: u64,
     search_input: Input,
     raw_search_results: Vec<YtDlpVideoInfo>,
@@ -101,6 +135,7 @@ impl YouTubePane {
         Ok(Self {
             focus: Focus::default(),
             library_video_focus: LibraryVideoFocus::default(),
+            search_mode: SearchMode::default(),
             search_generation: 0,
             search_input: Input::default(),
             raw_search_results: Vec::new(),
@@ -141,19 +176,66 @@ impl YouTubePane {
     fn filter_search_results(&mut self) {
         let query = self.search_input.value();
         if query.is_empty() {
-            self.filtered_search_results =
-                self.raw_search_results.clone().into_iter().map(|v| (100, v, vec![])).collect();
-        } else {
             self.filtered_search_results = self
                 .raw_search_results
-                .iter()
-                .filter_map(|video_info| {
-                    self.matcher
-                        .fuzzy_indices(&video_info.title, query)
-                        .map(|(score, indices)| (score, video_info.clone(), indices))
-                })
-                .sorted_by_key(|(score, _, _)| -*score)
+                .clone()
+                .into_iter()
+                .map(|v| (100, v, vec![]))
                 .collect();
+        } else {
+            match self.search_mode {
+                SearchMode::Fuzzy => {
+                    self.filtered_search_results = self
+                        .raw_search_results
+                        .iter()
+                        .filter_map(|video_info| {
+                            self.matcher
+                                .fuzzy_indices(&video_info.title, query)
+                                .map(|(score, indices)| (score, video_info.clone(), indices))
+                        })
+                        .sorted_by_key(|(score, _, _)| -*score)
+                        .collect();
+                }
+                SearchMode::Contains => {
+                    let lower_query = query.to_lowercase();
+                    self.filtered_search_results = self
+                        .raw_search_results
+                        .iter()
+                        .filter(|v| v.title.to_lowercase().contains(&lower_query))
+                        .map(|v| (100, v.clone(), vec![]))
+                        .collect();
+                }
+                SearchMode::StartsWith => {
+                    let lower_query = query.to_lowercase();
+                    self.filtered_search_results = self
+                        .raw_search_results
+                        .iter()
+                        .filter(|v| v.title.to_lowercase().starts_with(&lower_query))
+                        .map(|v| (100, v.clone(), vec![]))
+                        .collect();
+                }
+                SearchMode::Exact => {
+                    self.filtered_search_results = self
+                        .raw_search_results
+                        .iter()
+                        .filter(|v| v.title.eq_ignore_ascii_case(query))
+                        .map(|v| (100, v.clone(), vec![]))
+                        .collect();
+                }
+                SearchMode::Regex => {
+                    if let Ok(re) = Regex::new(query) {
+                        self.filtered_search_results = self
+                            .raw_search_results
+                            .iter()
+                            .filter(|v| re.is_match(&v.title))
+                            .map(|v| (100, v.clone(), vec![]))
+                            .collect();
+                    } else {
+                        // Invalid regex, show no results
+                        self.filtered_search_results.clear();
+                    }
+                }
+            }
         }
 
         if self.filtered_search_results.is_empty() {
