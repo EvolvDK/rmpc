@@ -14,9 +14,9 @@ use crate::{
     shared::events::{AppEvent, WorkDone},
 };
 
-/// Représente les métadonnées brutes d'une chanson YouTube, désérialisées depuis yt-dlp.
+/// Raw metadata from yt-dlp deserialization - kept private to the module
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct YtDlpSongInfo {
+struct YtDlpRawInfo {
     // Champs pour l'affichage brut
     pub id: String,
     pub duration: f64,
@@ -42,42 +42,66 @@ pub(crate) struct YtDlpSongInfo {
     album: Option<String>,
 }
 
-impl YtDlpSongInfo {
-    /// Résout le titre selon la priorité définie: track -> title -> fulltitle -> alt_title -> display_id
-    fn resolve_title(&self) -> String {
-        self.track
-            .as_ref()
-            .or(self.title.as_ref())
-            .or(self.fulltitle.as_ref())
-            .or(self.alt_title.as_ref())
-            .or(self.display_id.as_ref())
-            .cloned()
-            .unwrap_or_default()
-    }
+/// Resolved YouTube song metadata - public interface with all fields resolved once
+#[derive(Debug, Clone)]
+pub(crate) struct YtDlpSongInfo {
+    pub youtube_id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: Option<String>,
+    pub duration_secs: u32,
+    pub thumbnail_url: Option<String>,
+}
 
-    /// Résout l'artiste selon la priorité définie: artist -> album_artist -> creator -> uploader -> channel -> uploader_id
-    fn resolve_artist(&self) -> String {
-        self.artist
-            .as_ref()
-            .or(self.album_artist.as_ref())
-            .or(self.creator.as_ref())
-            .or(self.uploader.as_ref())
-            .or(self.channel.as_ref())
-            .or(self.uploader_id.as_ref())
-            .cloned()
-            .unwrap_or_default()
+impl YtDlpSongInfo {
+    /// Creates resolved song info from raw yt-dlp metadata
+    /// This is where all priority resolution happens - exactly once per song
+    pub(crate) fn from_raw(raw: YtDlpRawInfo) -> Self {
+        Self {
+            youtube_id: raw.id,
+            title: resolve_title_priority(&raw),
+            artist: resolve_artist_priority(&raw),
+            album: raw.album,
+            duration_secs: raw.duration as u32,
+            thumbnail_url: raw.thumbnail,
+        }
     }
+}
+
+/// Resolves title according to priority: track -> title -> fulltitle -> alt_title -> display_id
+fn resolve_title_priority(raw: &YtDlpRawInfo) -> String {
+    raw.track
+        .as_ref()
+        .or(raw.title.as_ref())
+        .or(raw.fulltitle.as_ref())
+        .or(raw.alt_title.as_ref())
+        .or(raw.display_id.as_ref())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Resolves artist according to priority: artist -> album_artist -> creator -> uploader -> channel -> uploader_id
+fn resolve_artist_priority(raw: &YtDlpRawInfo) -> String {
+    raw.artist
+        .as_ref()
+        .or(raw.album_artist.as_ref())
+        .or(raw.creator.as_ref())
+        .or(raw.uploader.as_ref())
+        .or(raw.channel.as_ref())
+        .or(raw.uploader_id.as_ref())
+        .cloned()
+        .unwrap_or_default()
 }
 
 impl From<YtDlpSongInfo> for YouTubeSong {
     fn from(info: YtDlpSongInfo) -> Self {
         Self {
-            youtube_id: info.id,
-            title: info.resolve_title(),
-            artist: info.resolve_artist(),
-            album: info.album,
-            duration_secs: info.duration as u32,
-            thumbnail_url: info.thumbnail,
+            youtube_id: info.youtube_id,    // Direct access - no resolution needed
+            title: info.title,              // Already resolved
+            artist: info.artist,            // Already resolved  
+            album: info.album,              // Direct access
+            duration_secs: info.duration_secs, // Already converted
+            thumbnail_url: info.thumbnail_url,  // Direct access
         }
     }
 }
