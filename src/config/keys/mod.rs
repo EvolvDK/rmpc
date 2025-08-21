@@ -142,6 +142,7 @@ impl Default for KeyConfigFile {
             logs: HashMap::from([
                 (Key { key: K::Char('D'), modifiers: M::SHIFT   }, L::Clear),
                 (Key { key: K::Char('S'), modifiers: M::SHIFT   }, L::ToggleScroll),
+                (Key { key: K::Char('y'), modifiers: M::NONE    }, L::Copy),
             ]),
             queue: HashMap::from([
                 (Key { key: K::Char('d'), modifiers: M::NONE    }, Q::Delete),
