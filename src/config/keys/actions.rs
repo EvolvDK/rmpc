@@ -281,6 +281,7 @@ pub enum LogsActionsFile {
 pub enum LogsActions {
     Clear,
     ToggleScroll,
+    Copy,
 }
 
 #[cfg(debug_assertions)]
