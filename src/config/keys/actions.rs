@@ -273,6 +273,7 @@ impl From<DirectoriesActionsFile> for DirectoriesActions {
 pub enum LogsActionsFile {
     Clear,
     ToggleScroll,
+    Copy,
 }
 
 #[cfg(debug_assertions)]
@@ -290,6 +291,7 @@ impl From<LogsActionsFile> for LogsActions {
         match value {
             LogsActionsFile::Clear => LogsActions::Clear,
             LogsActionsFile::ToggleScroll => LogsActions::ToggleScroll,
+            LogsActionsFile::Copy => LogsActions::Copy,
         }
     }
 }
@@ -300,6 +302,7 @@ impl ToDescription for LogsActions {
         match self {
             LogsActions::Clear => "Clear logs",
             LogsActions::ToggleScroll => "Toggle automatic scrolling when log gets added",
+            LogsActions::Copy => "Copy selected logs to clipboard",
         }
         .into()
     }
