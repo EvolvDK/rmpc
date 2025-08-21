@@ -1,5 +1,6 @@
 use anyhow::Result;
 use itertools::Itertools;
+use log::debug;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
@@ -138,13 +139,13 @@ impl LogsPane {
                 .join("\n");
 
             if selected_text.is_empty() {
-                eprintln!("No text selected for clipboard copy");
+                debug!("No text selected for clipboard copy");
                 return Ok(());
             }
 
             clipboard::copy_to_clipboard(selected_text);
         } else {
-            eprintln!("No selection to copy");
+            debug!("No selection to copy");
         }
 
         Ok(())

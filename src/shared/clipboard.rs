@@ -2,6 +2,8 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::thread;
 
+use log::error;
+
 pub fn copy_to_clipboard(text: String) {
     // Spawn a thread so the UI is not blocked
     thread::spawn(move || {
@@ -21,16 +23,16 @@ pub fn copy_to_clipboard(text: String) {
                 let output = child.wait_with_output();
                 if let Ok(out) = output {
                     if !out.status.success() {
-                        eprintln!(
+                        error!(
                             "xclip failed: {:?}",
                             String::from_utf8_lossy(&out.stderr)
                         );
                     }
                 } else if let Err(e) = output {
-                    eprintln!("Failed to wait xclip: {}", e);
+                    error!("Failed to wait xclip: {}", e);
                 }
             }
-            Err(e) => eprintln!("Failed to spawn xclip: {}", e),
+            Err(e) => error!("Failed to spawn xclip: {}", e),
         }
     });
 }
