@@ -6,15 +6,13 @@ use ratatui::{
     prelude::Rect,
     widgets::{List, ListItem, ListState},
 };
-use std::process::{Command, Stdio};
-use std::io::Write;
-use std::thread;
 
 use super::Pane;
 use crate::{
     config::keys::{CommonAction, LogsActions},
     ctx::Ctx,
     shared::{
+        clipboard,
         key_event::KeyEvent,
         mouse_event::{MouseEvent, MouseEventKind},
         ring_vec::RingVec,
@@ -121,7 +119,7 @@ impl LogsPane {
     }
 
     fn copy_selection_to_clipboard(&self) -> Result<()> {
-        if let Some((_start, _end)) = self.selection_state.selected_range() {
+        if self.selection_state.selected_range().is_some() {
             let max_line_width = (self.logs_area.width as usize)
                 .saturating_sub(LogFormatter::INDENT_LEN + 3);
             let formatted_lines = LogFormatter::format_lines(&self.logs, max_line_width);
@@ -144,34 +142,7 @@ impl LogsPane {
                 return Ok(());
             }
 
-            // Spawn a thread so the UI is not blocked
-            let text = selected_text.clone();
-            thread::spawn(move || {
-                let child = Command::new("xclip")
-                    .arg("-selection")
-                    .arg("clipboard")
-                    .stdin(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn();
-
-                match child {
-                    Ok(mut child) => {
-                        if let Some(mut stdin) = child.stdin.take() {
-                            let _ = stdin.write_all(text.as_bytes());
-                        }
-
-                        let output = child.wait_with_output();
-                        if let Ok(out) = output {
-                            if !out.status.success() {
-                                eprintln!("xclip failed: {:?}", String::from_utf8_lossy(&out.stderr));
-                            }
-                        } else if let Err(e) = output {
-                            eprintln!("Failed to wait xclip: {}", e);
-                        }
-                    }
-                    Err(e) => eprintln!("Failed to spawn xclip: {}", e),
-                }
-            });
+            clipboard::copy_to_clipboard(selected_text);
         } else {
             eprintln!("No selection to copy");
         }

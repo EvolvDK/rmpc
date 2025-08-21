@@ -1,3 +1,4 @@
+pub mod clipboard;
 pub mod dependencies;
 pub mod env;
 pub mod events;
