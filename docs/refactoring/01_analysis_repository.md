@@ -54,10 +54,27 @@ L'interaction entre `youtube.rs` et `youtube.rs` (le panneau UI) est bien défin
 Cependant, la complexité est presque entièrement concentrée dans le panneau UI. La structure `YouTubePane` est devenue un goulot d'étranglement pour la maintenabilité. L'architecture globale pourrait être grandement améliorée en refactorisant `YouTubePane` en composants plus petits et plus gérables, chacun avec son propre état et sa propre logique.
 
 ### Identification des goulots d'étranglement de performance
-*(...)*
+
+-   **Lancement de processus `yt-dlp` :** Chaque appel à `get_stream_url` ou `get_song_info` lance un nouveau processus. Cette opération est coûteuse en termes de temps de démarrage et de consommation de ressources système, ce qui peut entraîner une latence notable pour l'utilisateur lors de l'ajout d'une chanson à la file d'attente.
+-   **Filtrage des résultats de recherche en temps réel :** La méthode `filter_search_results` est exécutée à chaque frappe dans le champ de recherche. Pour des listes de résultats volumineuses, les modes de recherche gourmands en CPU comme "Fuzzy" ou "Regex" peuvent ralentir l'interface utilisateur et dégrader l'expérience de frappe.
+-   **Clonage de données :** Dans certains scénarios (par exemple, lorsque le champ de recherche est vide), la liste complète des résultats bruts (`raw_search_results`) est clonée. Si cette liste est grande, cela peut entraîner des pics d'utilisation de la mémoire et du CPU.
 
 ### Rapports de vulnérabilités de sécurité
-*(...)*
+
+-   **Déni de Service par Expression Régulière (ReDoS) :** Le mode de recherche "Regex" dans le panneau YouTube permet aux utilisateurs de saisir des expressions régulières personnalisées. Une expression malveillante conçue pour exploiter le "backtracking catastrophique" pourrait faire en sorte que le thread de l'interface utilisateur consomme 100% du CPU, gelant ainsi l'application. Le crate `regex` de Rust offre une certaine protection, mais le risque n'est pas nul.
+-   **Injection de commandes (Risque faible) :** L'application construit des commandes pour `yt-dlp` en utilisant des entrées utilisateur (la requête de recherche). Bien que `Command::arg()` soit conçu pour gérer les arguments de manière sécurisée et prévenir les injections de shell classiques, cette interaction avec un processus externe reste une surface d'attaque. Une vulnérabilité dans la manière dont `yt-dlp` analyse ses propres arguments pourrait potentiellement être exploitée.
+-   **Dépendances externes non sécurisées :** L'application hérite de toutes les vulnérabilités de sécurité de l'exécutable `yt-dlp`. Si une version vulnérable de `yt-dlp` est présente sur le système de l'utilisateur (par exemple, capable d'exécuter du code arbitraire via des métadonnées vidéo spécialement conçues), l'application devient un vecteur pour cette attaque.
 
 ### Quantification de la dette technique
-*(...)*
+
+-   **Objet Dieu `YouTubePane` (Coût : Élevé) :** C'est la source la plus importante de dette technique. La structure est devenue trop grande, avec une faible cohésion et une complexité cyclomatique élevée.
+    -   **Impact :** Rend l'ajout de nouvelles fonctionnalités lent et risqué. Augmente la charge cognitive pour les nouveaux développeurs. Rend les tests unitaires presque impossibles.
+    -   **Remédiation :** Une refactorisation majeure est nécessaire pour décomposer `YouTubePane` en composants plus petits et gérables (par exemple, `SearchComponent`, `LibraryComponent`). **Effort estimé : 3-5 jours-développeur.**
+
+-   **Implémentation du cache dans `youtube.rs` (Coût : Moyen) :** La logique de mise en cache est dupliquée dans trois fonctions distinctes et utilise `.unwrap()`, ce qui peut provoquer des panics.
+    -   **Impact :** Risque de crashs inattendus. La duplication rend la modification de la stratégie de cache (par exemple, la persistance sur disque) difficile.
+    -   **Remédiation :** Créer une abstraction de cache centralisée et robuste qui gère les verrous, la logique TTL et les erreurs de manière propre. **Effort estimé : 0.5-1 jour-développeur.**
+
+-   **Manque de tests automatisés (Coût : Élevé) :** L'absence de tests unitaires et d'intégration, en particulier pour la logique complexe de l'interface utilisateur, signifie que chaque changement nécessite des tests manuels approfondis et sujets aux erreurs.
+    -   **Impact :** Taux de régression élevé, cycle de développement ralenti.
+    -   **Remédiation :** L'écriture de tests pour l'actuel `YouTubePane` est peu pratique. La meilleure approche est d'introduire des tests lors de sa refactorisation en composants plus petits et testables. Ce coût est donc lié à la refactorisation de l'Objet Dieu.
