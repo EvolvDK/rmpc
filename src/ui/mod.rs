@@ -588,7 +588,7 @@ impl<'ui> Ui<'ui> {
 
     pub fn on_youtube_search_result(
         &mut self,
-        song_info: crate::youtube::YtDlpSongInfo,
+        song_info: crate::youtube::ResolvedYouTubeSong,
         generation: u64,
         ctx: &mut Ctx,
     ) -> Result<()> {

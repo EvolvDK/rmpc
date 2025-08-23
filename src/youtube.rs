@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use crossbeam::channel::Sender;
-use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -12,9 +11,10 @@ use tokio::{io::{AsyncBufReadExt, BufReader}, process::{Child, Command}};
 use crate::{
     core::data_store::models::YouTubeSong,
     shared::events::{AppEvent, WorkDone},
+    Arc,
 };
 
-/// Raw metadata from yt-dlp deserialization - kept private to the module
+/// Raw metadata from yt-dlp deserialization
 #[derive(Debug, Deserialize, Clone)]
 struct YtDlpRawInfo {
     // Champs pour l'affichage brut
@@ -44,7 +44,7 @@ struct YtDlpRawInfo {
 
 /// Resolved YouTube song metadata - public interface with all fields resolved once
 #[derive(Debug, Clone)]
-pub(crate) struct YtDlpSongInfo {
+pub struct ResolvedYouTubeSong {
     pub youtube_id: String,
     pub title: String,
     pub artist: String,
@@ -53,19 +53,26 @@ pub(crate) struct YtDlpSongInfo {
     pub thumbnail_url: Option<String>,
 }
 
-impl YtDlpSongInfo {
-    /// Creates resolved song info from raw yt-dlp metadata
-    /// This is where all priority resolution happens - exactly once per song
-    pub(crate) fn from_raw(raw: YtDlpRawInfo) -> Self {
+impl ResolvedYouTubeSong {
+    fn from_raw(raw: YtDlpRawInfo) -> Self {
+        let title = resolve_title_priority(&raw);
+        let artist = resolve_artist_priority(&raw);
+
         Self {
             youtube_id: raw.id,
-            title: resolve_title_priority(&raw),
-            artist: resolve_artist_priority(&raw),
+            title,
+            artist,
             album: raw.album,
             duration_secs: raw.duration as u32,
             thumbnail_url: raw.thumbnail,
         }
     }
+}
+
+/// Dedicated parsing function — public, hides raw type
+fn parse_song_info_json(bytes: &[u8]) -> Result<ResolvedYouTubeSong> {
+    let raw: YtDlpRawInfo = serde_json::from_slice(bytes)?;
+    Ok(ResolvedYouTubeSong::from_raw(raw))
 }
 
 /// Resolves title according to priority: track -> title -> fulltitle -> alt_title -> display_id
@@ -93,15 +100,15 @@ fn resolve_artist_priority(raw: &YtDlpRawInfo) -> String {
         .unwrap_or_default()
 }
 
-impl From<YtDlpSongInfo> for YouTubeSong {
-    fn from(info: YtDlpSongInfo) -> Self {
+impl From<ResolvedYouTubeSong> for YouTubeSong {
+    fn from(info: ResolvedYouTubeSong) -> Self {
         Self {
-            youtube_id: info.youtube_id,    // Direct access - no resolution needed
-            title: info.title,              // Already resolved
-            artist: info.artist,            // Already resolved  
-            album: info.album,              // Direct access
-            duration_secs: info.duration_secs, // Already converted
-            thumbnail_url: info.thumbnail_url,  // Direct access
+            youtube_id: info.youtube_id,
+            title: info.title,
+            artist: info.artist,
+            album: info.album,
+            duration_secs: info.duration_secs,
+            thumbnail_url: info.thumbnail_url,
         }
     }
 }
@@ -131,44 +138,56 @@ impl YouTubeSong {
     }
 }
 
-#[derive(Debug)]
-struct Cache {
-    searches: Mutex<HashMap<String, (Instant, Vec<YtDlpSongInfo>)>>,
-    stream_urls: Mutex<HashMap<String, (Instant, String)>>,
-    song_info: Mutex<HashMap<String, (Instant, YtDlpSongInfo)>>,
+/// Cache service, now injectable
+#[derive(Debug, Default, Clone)]
+pub struct YouTubeCache {
+    searches: Arc<Mutex<HashMap<String, (Instant, Vec<ResolvedYouTubeSong>)>>>,
+    stream_urls: Arc<Mutex<HashMap<String, (Instant, String)>>>,
+    song_info: Arc<Mutex<HashMap<String, (Instant, ResolvedYouTubeSong)>>>,
 }
 
-static CACHE: Lazy<Cache> = Lazy::new(|| Cache {
-    searches: Default::default(),
-    stream_urls: Default::default(),
-    song_info: Default::default(),
-});
+impl YouTubeCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
+
+/// Guard for child process
 struct ChildProcessGuard(Child);
 
 impl Drop for ChildProcessGuard {
     fn drop(&mut self) {
-        // Tenter de tuer le processus enfant. C'est la meilleure tentative que nous puissions faire.
-        // S'il a déjà terminé, cela échouera silencieusement, ce qui est acceptable.
         let _ = self.0.start_kill();
     }
 }
 
-/// Exécute une recherche sur YouTube via yt-dlp et retourne une liste de vidéos.
-///
-/// # Arguments
-/// * `query` - La chaîne de caractères pour la recherche.
-/// * `ttl` - La durée de vie du cache.
+/// Performs a YouTube search via yt-dlp and sends results via `event_tx`.
+/// Caches results if `ttl` > 0.
 pub async fn search(
+    cache: &YouTubeCache,
     query: &str,
     generation: u64,
     ttl: Duration,
     event_tx: Sender<AppEvent>,
 ) -> Result<()> {
-    // Note: Le cache n'est pas utilisé ici car la logique de génération le rend complexe
-    // à gérer correctement sans introduire de potentiels bugs de cohérence.
-    // Une implémentation future pourrait stocker les résultats avec leur génération.
+    // Check cache first
+    if ttl > Duration::ZERO {
+        if let Some((created, cached_results)) = cache.searches.lock().unwrap().get(query) {
+            if created.elapsed() < ttl {
+                for song in cached_results {
+                    event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult {
+                        song_info: song.clone().into(),
+                        generation,
+                    })))?;
+                }
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchFinished { generation })))?;
+                return Ok(());
+            }
+        }
+    }
 
+    // Spawn yt-dlp process
     let child = Command::new("yt-dlp")
         .arg("--dump-json")
         .arg(format!("https://music.youtube.com/search?q={}", query))
@@ -177,19 +196,18 @@ pub async fn search(
         .spawn()?;
 
     let mut guard = ChildProcessGuard(child);
-    let cmd = &mut guard.0;
-
-    let stdout = cmd.stdout.take().context("Failed to capture yt-dlp stdout")?;
+    let stdout = guard.0.stdout.take().context("Failed to capture yt-dlp stdout")?;
     let mut reader = BufReader::new(stdout).lines();
+
     let mut results_for_cache = Vec::new();
 
     while let Some(line) = reader.next_line().await? {
-        if let Ok(song_info) = serde_json::from_str::<YtDlpSongInfo>(&line) {
+        if let Ok(song) = parse_song_info_json(line.as_bytes()) {
             if ttl > Duration::ZERO {
-                results_for_cache.push(song_info.clone());
+                results_for_cache.push(song.clone());
             }
             event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSearchResult {
-                song_info,
+                song_info: song.into(),
                 generation,
             })))?;
         }
@@ -200,8 +218,9 @@ pub async fn search(
         return Err(anyhow::anyhow!("yt-dlp process exited with non-zero status"));
     }
 
+    // Store results in cache
     if ttl > Duration::ZERO {
-        CACHE
+        cache
             .searches
             .lock()
             .unwrap()
@@ -216,11 +235,12 @@ pub async fn search(
 /// Récupère l'URL de streaming pour le meilleur format audio d'une vidéo YouTube.
 ///
 /// # Arguments
+/// * `cache` - The YouTube cache instance
 /// * `song_id` - L'ID de la vidéo YouTube.
 /// * `ttl` - La durée de vie du cache.
-pub async fn get_stream_url(song_id: &str, ttl: Duration) -> Result<String> {
+pub async fn get_stream_url(cache: &YouTubeCache, song_id: &str, ttl: Duration) -> Result<String> {
     if ttl > Duration::ZERO {
-        if let Some((created, url)) = CACHE.stream_urls.lock().unwrap().get(song_id) {
+        if let Some((created, url)) = cache.stream_urls.lock().unwrap().get(song_id) {
             if created.elapsed() < ttl {
                 return Ok(url.clone());
             }
@@ -230,7 +250,7 @@ pub async fn get_stream_url(song_id: &str, ttl: Duration) -> Result<String> {
     let output = Command::new("yt-dlp")
         .arg("-g") // Get URL
         .arg("-f") // Format
-        .arg("bestaudio")
+        .arg("bestaudio[protocol^=https]")
         .arg(format!("https://www.youtube.com/watch?v={}", song_id))
         .output()
         .await?;
@@ -246,19 +266,24 @@ pub async fn get_stream_url(song_id: &str, ttl: Duration) -> Result<String> {
     }
 
     if ttl > Duration::ZERO {
-        CACHE
-            .stream_urls
-            .lock()
-            .unwrap()
-            .insert(song_id.to_string(), (Instant::now(), url.clone()));
+        cache.stream_urls.lock().unwrap().insert(
+            song_id.to_string(),
+            (Instant::now(), url.clone()),
+        );
     }
 
     Ok(url)
 }
 
-pub async fn get_song_info(song_id: &str, ttl: Duration) -> Result<Option<YouTubeSong>> {
+/// Gets song information from YouTube
+///
+/// # Arguments  
+/// * `cache` - The YouTube cache instance
+/// * `song_id` - The YouTube video ID
+/// * `ttl` - Cache time-to-live duration
+pub async fn get_song_info(cache: &YouTubeCache, song_id: &str, ttl: Duration,) -> Result<Option<YouTubeSong>> {
     if ttl > Duration::ZERO {
-        if let Some((created, song_info)) = CACHE.song_info.lock().unwrap().get(song_id) {
+        if let Some((created, song_info)) = cache.song_info.lock().unwrap().get(song_id) {
             if created.elapsed() < ttl {
                 return Ok(Some(song_info.clone().into()));
             }
@@ -277,18 +302,17 @@ pub async fn get_song_info(song_id: &str, ttl: Duration) -> Result<Option<YouTub
         return Ok(None);
     }
 
-    let song_info: YtDlpSongInfo = serde_json::from_slice(&output.stdout)?;
-
+    let song_info = parse_song_info_json(&output.stdout)?;
     if ttl > Duration::ZERO {
-        CACHE
-            .song_info
-            .lock()
-            .unwrap()
-            .insert(song_id.to_string(), (Instant::now(), song_info.clone()));
+        cache.song_info.lock().unwrap().insert(
+            song_id.to_string(),
+            (Instant::now(), song_info.clone()),
+        );
     }
 
     Ok(Some(song_info.into()))
 }
+
 
 /// Ajoute l'ID YouTube permanent à une URL de streaming comme paramètre de requête.
 ///

@@ -659,31 +659,132 @@ fn main_task<B: Backend + std::io::Write>(
 /// Retourne `true` si l'erreur a été gérée, `false` sinon.
 fn handle_youtube_stream_error(err: &anyhow::Error, ctx: &mut Ctx) -> bool {
     if let Some(MpdError::Mpd(MpdFailureResponse {
-        code: ErrorCode::NoExist,
+        code,
         command,
+        message,
         ..
     })) = err.downcast_ref::<MpdError>()
     {
-        if command == "playid" {
+        // Check if this looks like a YouTube URL error
+        let is_youtube_error = is_youtube_url_error(code, command, message);
+        
+        if is_youtube_error {
+            log::debug!(
+                "Detected potential YouTube URL error: code={:?}, command={}",
+                code,
+                command
+            );
+            
             if let (Some(song_id), Some(pos)) = (ctx.status.songid, ctx.status.song) {
-                if let Ok(Some((youtube_id, _))) = ctx.data_store.get_youtube_id_for_song(song_id)
-                {
-                    if let Some(song) = ctx.youtube_library.get(&youtube_id).cloned() {
-                        try_skip!(
-                            ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
-                                old_song_id: song_id,
-                                position: pos,
-                                song,
-                            }),
-                            "Failed to send YouTube stream refresh request"
+                // CRITICAL: Cannot extract YouTube ID from truncated URL in error message
+                // Must rely on database fallback as primary method
+                match extract_youtube_id_for_refresh(song_id, ctx) {
+                    Some((youtube_id, song)) => {
+                        // Send refresh request
+                        match ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
+                            old_song_id: song_id,
+                            position: pos,
+                            song,
+                        }) {
+                            Ok(()) => {
+                                log::info!(
+                                    "Detected expired YouTube URL (truncated in logs), triggering refresh via database lookup: song_id={}, youtube_id={}, error_code={:?}",
+                                    song_id,
+                                    youtube_id,
+                                    code
+                                );
+                                return true; // Error handled successfully
+                            }
+                            Err(send_err) => {
+                                log::error!(
+                                    "Failed to send YouTube stream refresh request: song_id={}, error={:?}",
+                                    song_id,
+                                    send_err
+                                );
+                                return false;
+                            }
+                        }
+                    }
+                    None => {
+                        log::warn!(
+                            "Could not extract YouTube ID for refresh - song may not be from YouTube or not in database: song_id={}",
+                            song_id
                         );
-                        return true; // Erreur gérée
                     }
                 }
+            } else {
+                log::warn!("Cannot refresh YouTube stream: no current song ID or position available");
             }
         }
+    }   
+    false // Error not handled
+}
+
+/// Determines if an MPD error is related to YouTube URL problems
+fn is_youtube_url_error(code: &ErrorCode, command: &str, message: &str) -> bool {
+    match code {
+        // Case 1: File not found errors on playback commands
+        ErrorCode::NoExist if matches!(command, "playid" | "playId") => true,
+        
+        // Case 2: HTTP 403 errors reported as unknown command (main case from logs)
+        ErrorCode::UnknownCmd if matches!(command, "playid" | "playId") => {
+            message.contains("HTTP status 403") || message.contains("got HTTP status 4")
+        }
+        
+        // Case 3: System errors containing HTTP errors
+        ErrorCode::System => {
+            message.contains("HTTP status 403") 
+                || message.contains("HTTP status 410")  // Gone
+                || message.contains("HTTP status 404")  // Not found
+                || message.contains("Failed to decode")
+        }
+        
+        // Case 4: Other playback-related errors that might indicate URL issues
+        ErrorCode::PlayerSync if matches!(command, "playid" | "playId") => {
+            message.contains("HTTP status") || message.contains("decode")
+        }
+        
+        _ => false,
     }
-    false // Erreur non gérée
+}
+
+fn extract_youtube_id_for_refresh(song_id: u32, ctx: &Ctx) -> Option<(String, crate::core::data_store::models::YouTubeSong)> {
+    // Priority 1: Database query against queue_youtube_metadata table
+    match ctx.data_store.get_youtube_id_for_song(song_id) {
+        Ok(Some((youtube_id, _))) => {
+            // Priority 2: YouTube library cache lookup
+            if let Some(song) = ctx.youtube_library.get(&youtube_id).cloned() {
+                log::debug!(
+                    "Successfully extracted YouTube ID from database and library cache: song_id={}, youtube_id={}",
+                    song_id,
+                    youtube_id
+                );
+                return Some((youtube_id, song));
+            } else {
+                log::warn!(
+                    "YouTube ID found in database but song not in library cache: song_id={}, youtube_id={}",
+                    song_id,
+                    youtube_id
+                );
+            }
+        }
+        Ok(None) => {
+            log::debug!("Song is not a YouTube song (no entry in database): song_id={}", song_id);
+        }
+        Err(db_err) => {
+            log::error!(
+                "Failed to query YouTube ID from database: song_id={}, error={:?}",
+                song_id,
+                db_err
+            );
+        }
+    }
+
+    // Could add Priority 3: MPD song 'file' field parsing if available
+    // This would require access to the current song from ctx.queue
+    // But since we already have song_id, the database should be sufficient
+
+    None
 }
 
 fn handle_idle_event(event: IdleEvent, ctx: &Ctx, result_ui_evs: &mut HashSet<UiEvent>) {

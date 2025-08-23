@@ -67,7 +67,7 @@ impl DataStore {
                         song_id     INTEGER PRIMARY KEY,
                         youtube_id  TEXT NOT NULL
                     );
-                    CREATE TABLE IF NOT EXISTS youtube_songs (
+                    CREATE TABLE IF NOT EXISTS songs (
                         youtube_id      TEXT PRIMARY KEY NOT NULL,
                         title           TEXT NOT NULL,
                         artist          TEXT NOT NULL,
@@ -86,7 +86,7 @@ impl DataStore {
                         file_path           TEXT,
                         PRIMARY KEY (playlist_id, position),
                         FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
-                        FOREIGN KEY (song_youtube_id) REFERENCES youtube_songs(youtube_id) ON DELETE CASCADE,
+                        FOREIGN KEY (song_youtube_id) REFERENCES songs(youtube_id) ON DELETE CASCADE,
                         CHECK (song_youtube_id IS NOT NULL OR file_path IS NOT NULL)
                     );
                     ",

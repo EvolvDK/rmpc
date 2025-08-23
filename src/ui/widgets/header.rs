@@ -34,18 +34,18 @@ impl Widget for Header<'_> {
         let layouts = Layout::vertical((0..row_count).map(|_| Constraint::Length(1))).split(area);
         let song_cow = self.ctx.find_current_song_in_queue().map(|(_, song)| {
             if let Some(yt_id) = song.youtube_id() {
-                if let Some(song) = self.ctx.youtube_library.get(yt_id) {
+                if let Some(yt_song) = self.ctx.youtube_library.get(yt_id) {
                     let mut enriched_song = song.clone();
 
                     enriched_song.metadata.insert(
                         "title".to_string(),
-                        MetadataTag::Single(song.title.clone()),
+                        MetadataTag::Single(yt_song.title.clone()),
                     );
                     enriched_song.metadata.insert(
                         "artist".to_string(),
-                        MetadataTag::Single(song.artist.clone()),
+                        MetadataTag::Single(yt_song.artist.clone()),
                     );
-                    if let Some(album) = &song.album {
+                    if let Some(album) = &yt_song.album {
                         enriched_song
                             .metadata
                             .insert("album".to_string(), MetadataTag::Single(album.clone()));

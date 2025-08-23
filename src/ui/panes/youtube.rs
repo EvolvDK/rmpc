@@ -23,7 +23,7 @@ use crate::{
     core::data_store::models::{PlaylistItem, YouTubeSong},
     shared::id,
     ctx::Ctx,
-    youtube::YtDlpSongInfo,
+    youtube::ResolvedYouTubeSong,
     shared::{
         events::{AppEvent, WorkRequest},
         key_event::KeyEvent,
@@ -109,8 +109,8 @@ pub struct YouTubePane {
     search_mode: SearchMode,
     search_generation: u64,
     search_input: Input,
-    raw_search_results: Vec<YtDlpSongInfo>,
-    filtered_search_results: Vec<(i64, YtDlpSongInfo, Vec<usize>)>,
+    raw_search_results: Vec<ResolvedYouTubeSong>,
+    filtered_search_results: Vec<(i64, ResolvedYouTubeSong, Vec<usize>)>,
     search_list_state: ListState,
     is_loading_search: bool,
     matcher: SkimMatcherV2,
@@ -169,7 +169,7 @@ impl YouTubePane {
     }
 
     // Search methods
-    pub fn on_search_result(&mut self, song_info: YtDlpSongInfo, generation: u64) {
+    pub fn on_search_result(&mut self, song_info: ResolvedYouTubeSong, generation: u64) {
         if generation == self.search_generation {
             self.raw_search_results.push(song_info);
             self.filter_search_results();
@@ -648,7 +648,7 @@ impl YouTubePane {
     }
 
     fn render_search_result_item<'a>(
-        song_info: &'a YtDlpSongInfo,
+        song_info: &'a ResolvedYouTubeSong,
         indices: &'a [usize],
         ctx: &'a Ctx,
     ) -> ListItem<'a> {
