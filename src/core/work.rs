@@ -55,8 +55,8 @@ impl WorkerOrchestrator {
             WorkRequest::GetYouTubeStreamUrl { song, context } => {
                 self.handle_stream_url_request(song, context, event_tx.clone()).await
             }
-            WorkRequest::YouTubeGetSongInfo { id } => {
-                self.handle_song_info_request(id, &event_tx).await
+            WorkRequest::YouTubeGetSongInfo { id, context } => {
+                self.handle_song_info_request(id, context, &event_tx).await
             }
         };
 
@@ -142,11 +142,13 @@ impl WorkerOrchestrator {
         context: Option<YouTubeStreamContext>,
         event_tx: Sender<AppEvent>,
     ) -> Result<()> {
-        let song_result: Result<YouTubeSong, YouTubeError> = match song_to_refresh {
-            IdentifiedYouTubeSong::Full(song) => Ok(song),
-            IdentifiedYouTubeSong::IdOnly(ref id) => { 
+        let song_result: Result<YouTubeSong, YouTubeError> = match &song_to_refresh {
+            IdentifiedYouTubeSong::Full(song) => Ok(song.clone()),
+            IdentifiedYouTubeSong::IdOnly(id) => {
                 log::info!("Metadata for song '{}' is missing, fetching for refresh...", id);
-                self.youtube_service.get_song_info(&id).await
+                self.youtube_service
+                    .get_song_info(id)
+                    .await
                     .and_then(|opt| opt.ok_or(YouTubeError::VideoUnavailable))
                     .map(Into::into)
             }
@@ -180,20 +182,32 @@ impl WorkerOrchestrator {
     async fn handle_song_info_request(
         &self,
         id: String,
+        context: Option<YouTubeStreamContext>,
         event_tx: &Sender<AppEvent>,
     ) -> Result<()> {
         match self.youtube_service.get_song_info(&id).await {
             Ok(Some(song)) => {
-                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFetched(song.into()))))?;
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFetched {
+                    song: song.into(),
+                    context,
+                })))?;
             }
             Ok(None) => {
                 // Explicitly signal that the video could not be found.
                 let error = YouTubeError::VideoUnavailable;
-                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFailed { id, error })))?;
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFailed {
+                    id,
+                    error,
+                    context,
+                })))?;
             }
             Err(e) => {
                 // Propagate other errors (network, command failed, etc.).
-                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFailed { id, error: e.into() })))?;
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFailed {
+                    id,
+                    error: e.into(),
+                    context,
+                })))?;
             }
         }
         Ok(())

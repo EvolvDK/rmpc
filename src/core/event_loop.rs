@@ -10,15 +10,15 @@ use crate::{
     shared::{
         events::{AppEvent, IdentifiedYouTubeSong, WorkDone, WorkRequest, YouTubeStreamContext},
         ext::error::ErrorExt,
-        id::Id,
+        id::{self, Id},
         key_event::KeyEvent,
         macros::{status_error, status_warn},
         mpd_query::{
             run_status_update, EXTERNAL_COMMAND, GLOBAL_QUEUE_UPDATE, GLOBAL_STATUS_UPDATE,
             GLOBAL_VOLUME_UPDATE, MpdQueryResult,
         },
-        scheduler::TaskGuard,
     },
+    core::scheduler::TaskGuard,
     ui::{
         modals::info_modal::InfoModal, KeyHandleResult, StatusMessage, Ui, UiAppEvent, UiEvent,
     },
@@ -370,7 +370,7 @@ impl<'a, B: Backend + Write> App<'a, B> {
                     if let Some(stream_context) = context {
                         let request = WorkRequest::GetYouTubeStreamUrl {
                             song: IdentifiedYouTubeSong::Full(song.clone()),
-                            context,
+                            context: Some(stream_context),
                         };
                         self.ctx.work_sender.send(request)?;
                     }
@@ -383,15 +383,44 @@ impl<'a, B: Backend + Write> App<'a, B> {
                     }
                     self.ui.on_youtube_import_item_failed(&mut self.ctx)?;
                 }
-                WorkDone::MpdCommandFinished { id, target, data } => match (id, target, data) {
-                    (GLOBAL_STATUS_UPDATE, None, MpdQueryResult::Status { data, source_event }) => self.process_global_status_update(data, source_event)?,
-                    (GLOBAL_VOLUME_UPDATE, None, MpdQueryResult::Volume(volume)) => self.ctx.status.volume = volume,
-                    (GLOBAL_QUEUE_UPDATE, None, MpdQueryResult::Queue(queue)) => self.process_global_queue_update(queue.unwrap_or_default())?,
-                    (EXTERNAL_COMMAND, None, MpdQueryResult::ExternalCommand(cmd, songs)) => {
-                        run_external(cmd, create_env(&self.ctx, songs.iter().map(|s| s.file.as_str())));
+                WorkDone::MpdCommandFinished { id, target, data } => {
+                    // This logic prevents move errors by checking for global handlers before matching and moving data.
+                    let is_global_event = if target.is_none() {
+                        matches!((id, &data), (GLOBAL_STATUS_UPDATE, MpdQueryResult::Status { .. })
+                            | (GLOBAL_VOLUME_UPDATE, MpdQueryResult::Volume(_))
+                            | (GLOBAL_QUEUE_UPDATE, MpdQueryResult::Queue(_))
+                            | (EXTERNAL_COMMAND, MpdQueryResult::ExternalCommand(_, _)))
+                    } else {
+                        false
+                    };
+
+                    if is_global_event {
+                        match (id, data) {
+                            (
+                                GLOBAL_STATUS_UPDATE,
+                                MpdQueryResult::Status { data, source_event },
+                            ) => self.process_global_status_update(data, source_event)?,
+                            (GLOBAL_VOLUME_UPDATE, MpdQueryResult::Volume(volume)) => {
+                                self.ctx.status.volume = volume
+                            }
+                            (GLOBAL_QUEUE_UPDATE, MpdQueryResult::Queue(queue)) => {
+                                self.process_global_queue_update(queue.unwrap_or_default())?
+                            }
+                            (
+                                EXTERNAL_COMMAND,
+                                MpdQueryResult::ExternalCommand(cmd, songs),
+                            ) => {
+                                run_external(
+                                    cmd,
+                                    create_env(&self.ctx, songs.iter().map(|s| s.file.as_str())),
+                                );
+                            }
+                            _ => unreachable!("Should be covered by is_global_event check"),
+                        }
+                    } else {
+                        self.ui.on_command_finished(id, target, data, &mut self.ctx)?
                     }
-                    _ => self.ui.on_command_finished(id, target, data, &mut self.ctx)?,
-                },
+                }
                 WorkDone::None => {}
             },
             Err(err) => {
