@@ -65,7 +65,7 @@ impl YouTubePane {
         self.library.remove_song(youtube_id);
     }
 
-    fn handle_outcome(&mut self, outcome: ActionOutcome, ctx: &mut Ctx) -> Result<()> {
+    fn handle_outcome(&mut self, outcome: ActionOutcome, ctx: &Ctx) -> Result<()> {
         match outcome {
             ActionOutcome::FocusChanged(new_focus) => self.focus = new_focus,
             ActionOutcome::QueueSong(song) => {

@@ -197,19 +197,15 @@ impl<'a, B: Backend + Write> App<'a, B> {
             AppEvent::RemoteSwitchTab { tab_name } => {
 				self.ui.on_ui_app_event(UiAppEvent::ChangeTab(tab_name.into()), &mut self.ctx)?
 			}
-            AppEvent::IpcQuery { stream, targets } => {
-				self.ui.on_ipc_query(stream, targets, &self.ctx) // TODO: Re-implement this with logic below
-				
-                //AppEvent::IpcQuery { mut stream, targets } => {
-                    //for target in targets {
-                        //match target {
-                            //RemoteCommandQuery::ActiveTab => {
-                                //stream
-                                    //.insert_response(target.to_string(), ctx.active_tab.0.as_str());
-                            //}
-                        //}
-                    //}
-                //}
+            AppEvent::IpcQuery { mut stream, targets } => {
+                for target in targets {
+                    match target {
+                        RemoteCommandQuery::ActiveTab => {
+                            stream
+                                .insert_response(target.to_string(), self.ctx.active_tab.0.as_str());
+                        }
+                    }
+                }
 			}
         };
         // Any event that was handled likely requires a re-render.
