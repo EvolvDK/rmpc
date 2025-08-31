@@ -342,7 +342,7 @@ fn main() -> Result<()> {
 
             // STEP 3: Inject the service into the event loop initializer,
             // which will then pass it to the worker thread.
-            let event_loop_handle = core::event_loop::init(ctx, event_rx, terminal, youtube_service)?;
+            let event_loop_handle = core::event_loop::init(ctx, event_rx, worker_rx, terminal, youtube_service)?;
 
             let original_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |panic| {

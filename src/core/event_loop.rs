@@ -514,6 +514,7 @@ pub fn init<B: Backend + Write + Send + 'static>(
     event_rx: Receiver<AppEvent>,
     work_rx: Receiver<WorkRequest>,
     terminal: Terminal<B>,
+    youtube_service: Arc<dyn YouTubeService>,
 ) -> std::io::Result<std::thread::JoinHandle<Terminal<B>>> {
     std::thread::Builder::new()
         .name("main".to_owned())
@@ -521,8 +522,10 @@ pub fn init<B: Backend + Write + Send + 'static>(
             // Pass the service to the worker's init function.
             work::init(
                 work_rx,
+                ctx.client_sender.clone(),
                 ctx.app_event_sender.clone(),
                 ctx.config.clone(),
+                youtube_service,
             )
             .expect("Worker initialization failed");
 
