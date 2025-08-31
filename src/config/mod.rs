@@ -94,6 +94,12 @@ impl From<YouTubeServiceConfigFile> for YouTubeServiceConfig {
     }
 }
 
+impl Default for YouTubeServiceConfig {
+    fn default() -> Self {
+        YouTubeServiceConfigFile::default().into()
+    }
+}
+
 use self::{
     keys::{KeyConfig, KeyConfigFile},
     theme::{ConfigColor, UiConfig, UiConfigFile},
