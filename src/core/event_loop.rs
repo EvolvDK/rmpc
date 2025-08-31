@@ -8,7 +8,7 @@ use crate::{
     },
     youtube::service::YouTubeService,
     shared::{
-        events::{AppEvent, IdentifiedYouTubeSong, WorkDone, WorkRequest, YouTubeStreamContext},
+        events::{AppEvent, ClientRequest, IdentifiedYouTubeSong, WorkDone, WorkRequest, YouTubeStreamContext},
         ext::error::ErrorExt,
         id::{self, Id},
         key_event::KeyEvent,
@@ -24,7 +24,7 @@ use crate::{
     },
 };
 use anyhow::Result;
-use crossbeam::channel::{Receiver, RecvTimeoutError};
+use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
 use ratatui::{prelude::Backend, layout::Rect, Terminal};
 use std::{
     collections::HashSet,
@@ -49,8 +49,8 @@ struct App<'a, B: Backend + Write> {
     ui: Ui<'a>,
     last_render: Instant,
     min_frame_duration: Duration,
-    update_loop_guard: Option<TaskGuard<()>>,
-    update_db_loop_guard: Option<TaskGuard<()>>,
+    update_loop_guard: Option<TaskGuard<(Sender<AppEvent>, Sender<ClientRequest>)>>,
+    update_db_loop_guard: Option<TaskGuard<(Sender<AppEvent>, Sender<ClientRequest>)>>,
     tmux: Option<crate::shared::tmux::TmuxHooks>,
     is_connected: bool,
     render_wanted: bool,
