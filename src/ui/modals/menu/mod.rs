@@ -12,7 +12,7 @@ use ratatui::{
 use anyhow::Context as _;
 use crate::{
     config::keys::actions::AddOpts,
-    core::data_store::models::{PlaylistItem, YouTubeSong},
+    core::data_store::models::{Playlist, PlaylistItem, YouTubeSong},
     ctx::Ctx,
     shared::{
         events::AppEvent,
@@ -20,7 +20,10 @@ use crate::{
         macros::{status_error, status_info},
         mpd_client_ext::{Enqueue, MpdClientExt as _},
     },
-    ui::{modals::input_modal::InputModal, UiAppEvent},
+    ui::{
+        modals::{input_modal::InputModal, Modal},
+        UiAppEvent,
+    },
 };
 
 mod input_section;
@@ -155,6 +158,73 @@ impl Section for SectionType<'_> {
             SectionType::Input(s) => s.double_click(pos, ctx),
         }
     }
+}
+
+fn create_playlist_from_items_modal(
+    ctx: &Ctx,
+    items: Vec<PlaylistItem>,
+) -> Box<dyn Modal + Send + Sync> {
+    let modal = InputModal::new(ctx)
+        .title("Create new playlist")
+        .on_confirm(move |ctx, name| {
+            if !name.is_empty() {
+                ctx.app_event_sender
+                    .send(AppEvent::UiEvent(UiAppEvent::CreatePlaylistFromItems {
+                        name: name.to_string(),
+                        items,
+                    }))?;
+            }
+            Ok(())
+        });
+    Box::new(modal)
+}
+
+pub fn playlist_editing_actions(
+    playlist: Playlist,
+) -> impl FnOnce(ListSection) -> Option<ListSection> {
+    move |section| {
+        let p_clone = playlist.clone();
+        Some(
+            section
+                .item("Rename", move |ctx| {
+                    let title = format!("Rename '{}'", p_clone.name);
+                    let modal = InputModal::new(ctx)
+						.title(&title)
+                        .initial_value(p_clone.name.clone())
+                        .on_confirm(move |ctx, new_name| {
+                            ctx.app_event_sender.send(AppEvent::UiEvent(
+                                UiAppEvent::RenamePlaylist {
+                                    id: p_clone.id,
+                                    old_name: p_clone.name.clone(),
+                                    new_name: new_name.to_string(),
+                                },
+                            ))?;
+                            Ok(())
+                        });
+                    ctx.app_event_sender
+                        .send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;
+                    Ok(())
+                })
+                .item("Delete", move |ctx| {
+                    ctx.app_event_sender
+                        .send(AppEvent::UiEvent(UiAppEvent::DeletePlaylist(playlist.id)))?;
+                    Ok(())
+                }),
+        )
+    }
+}
+
+pub fn create_playlist_modal(ctx: &Ctx) -> Box<dyn Modal + Send + Sync> {
+    let modal = InputModal::new(ctx)
+        .title("Create New Playlist")
+        .on_confirm(|ctx, name| {
+            if !name.is_empty() {
+                ctx.app_event_sender
+                    .send(AppEvent::UiEvent(UiAppEvent::CreatePlaylist(name)))?;
+            }
+            Ok(())
+        });
+    Box::new(modal)
 }
 
 pub fn create_add_modal<'a>(
@@ -294,21 +364,9 @@ pub fn playlist_management_actions(
                     Ok(())
                 })
                 .item("Create playlist from selection...", move |ctx| {
-                    let modal = InputModal::new(ctx)
-                        .title("Create new playlist")
-                        .on_confirm(move |ctx, name| {
-                            if !name.is_empty() {
-                                ctx.app_event_sender.send(AppEvent::UiEvent(
-                                    UiAppEvent::CreatePlaylistFromItems {
-                                        name: name.to_string(),
-                                        items: create_playlist_items.clone(),
-                                    },
-                                ))?;
-                            }
-                            Ok(())
-                        });
+                    let modal = create_playlist_from_items_modal(ctx, create_playlist_items.clone());
                     ctx.app_event_sender
-                        .send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;
+                        .send(AppEvent::UiEvent(UiAppEvent::Modal(modal)))?;
                     Ok(())
                 }),
         )
@@ -358,62 +416,33 @@ pub fn create_playlist_action(
             return None;
         }
         Some(section.item("Create playlist from selection...", move |ctx| {
-            let modal = InputModal::new(ctx)
-                .title("Create new playlist")
-                .on_confirm(move |ctx, name| {
-                    if !name.is_empty() {
-                        ctx.app_event_sender.send(AppEvent::UiEvent(
-                            UiAppEvent::CreatePlaylistFromItems {
-                                name: name.to_string(),
-                                items: items.clone(),
-                            },
-                        ))?;
-                    }
-                    Ok(())
-                });
+            let modal = create_playlist_from_items_modal(ctx, items.clone());
             ctx.app_event_sender
-                .send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;
+                .send(AppEvent::UiEvent(UiAppEvent::Modal(modal)))?;
             Ok(())
         }))
     }
 }
 
 pub fn playlist_queue_actions(
-    playlist_name: String,
+    items: Vec<PlaylistItem>,
 ) -> impl FnOnce(ListSection) -> Option<ListSection> {
     move |section| {
-        let p_name_add = playlist_name.clone();
-        let p_name_replace = playlist_name;
+        let add_items = items.clone();
+        let replace_items = items;
         Some(
             section
                 .item("Add to queue", move |ctx| {
-                    match ctx.data_store.get_all_playlists() {
-                        Ok(playlists) => {
-                            if let Some(p) = playlists.into_iter().find(|p| p.name == p_name_add) {
-                                ctx.app_event_sender.send(AppEvent::UiEvent(
-                                    UiAppEvent::AddPlaylistItemsToQueue(p.items),
-                                ))?;
-                            } else {
-                                status_error!("Playlist '{}' not found.", p_name_add);
-                            }
-                        }
-                        Err(e) => status_error!("Failed to load playlist: {e}"),
-                    }
+                    ctx.app_event_sender
+                        .send(AppEvent::UiEvent(UiAppEvent::AddPlaylistItemsToQueue(
+                            add_items,
+                        )))?;
                     Ok(())
                 })
                 .item("Replace queue", move |ctx| {
-                    match ctx.data_store.get_all_playlists() {
-                        Ok(playlists) => {
-                            if let Some(p) = playlists.into_iter().find(|p| p.name == p_name_replace) {
-                                ctx.app_event_sender.send(AppEvent::UiEvent(
-                                    UiAppEvent::ReplaceQueueWithPlaylistItems(p.items),
-                                ))?;
-                            } else {
-                                status_error!("Playlist '{}' not found.", p_name_replace);
-                            }
-                        }
-                        Err(e) => status_error!("Failed to load playlist: {e}"),
-                    }
+                    ctx.app_event_sender.send(AppEvent::UiEvent(
+                        UiAppEvent::ReplaceQueueWithPlaylistItems(replace_items),
+                    ))?;
                     Ok(())
                 }),
         )
@@ -451,7 +480,7 @@ pub fn youtube_library_actions(
 }
 
 pub fn add_playlist_to_playlist_actions(
-    source_playlist_name: String,
+    source_items: Vec<PlaylistItem>,
     other_playlists: Vec<String>,
 ) -> impl FnOnce(ListSection) -> Option<ListSection> {
     move |section| {
@@ -463,31 +492,14 @@ pub fn add_playlist_to_playlist_actions(
                 .list_section(ctx, |s| {
                     let mut s = s;
                     for p_name in other_playlists {
-                        let source_p_name = source_playlist_name.clone();
+                        let items_to_add = source_items.clone();
                         let target_p_name = p_name.clone();
                         s = s.item(p_name, move |ctx| {
-                            match ctx.data_store.get_all_playlists() {
-                                Ok(playlists) => {
-                                    if let Some(p) =
-                                        playlists.into_iter().find(|p| p.name == source_p_name)
-                                    {
-                                        ctx.app_event_sender.send(AppEvent::UiEvent(
-                                            UiAppEvent::AddItemsToPlaylist {
-                                                name: target_p_name,
-                                                items: p.items,
-                                            },
-                                        ))?;
-                                    } else {
-                                        status_error!(
-                                            "Source playlist '{}' not found.",
-                                            source_p_name
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    status_error!("Failed to load playlist to add: {e}")
-                                }
-                            }
+                            ctx.app_event_sender
+                                .send(AppEvent::UiEvent(UiAppEvent::AddItemsToPlaylist {
+                                    name: target_p_name,
+                                    items: items_to_add,
+                                }))?;
                             Ok(())
                         });
                     }
