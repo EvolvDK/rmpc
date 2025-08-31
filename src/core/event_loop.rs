@@ -547,7 +547,7 @@ pub fn init<B: Backend + Write + Send + 'static>(
             // Pass the service to the worker's init function.
             work::init(
                 work_rx,
-                ctx.client_sender.clone(),
+                ctx.client_request_sender.clone(),
                 ctx.app_event_sender.clone(),
                 ctx.config.clone(),
                 youtube_service,
