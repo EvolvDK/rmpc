@@ -232,8 +232,8 @@ impl YouTubeService for YouTubeServiceImpl {
             tokio::join!(client_health_fut, cache_health_fut);
 
         Ok(ServiceHealthStatus::new(
-            client_health,
-            cache_health.map(|_| ()).map_err(YouTubeError::from),
+            client_health.map_err(anyhow::Error::from),
+            cache_health.map(|_| ()).map_err(anyhow::Error::from),
         ))
     }
 }

@@ -5,7 +5,7 @@ use crate::{
         client::{YtDlpClient, YtDlpClientConfig},
         r#impl::service_impl::YouTubeServiceImpl,
         security::rate_limiting::RateLimiterConfig,
-        service::{CacheService, YouTubeClient, YouTubeService},
+        service::{config::YouTubeServiceConfig, CacheService, YouTubeClient, YouTubeService},
     },
 };
 use anyhow::Result;
@@ -22,16 +22,21 @@ impl YouTubeServiceFactory {
     /// Helper function to create a configured YtDlpClient, removing duplication.
     fn create_client(config: &Config) -> Arc<dyn YouTubeClient> {
         let client_config = YtDlpClientConfig {
-            ytdlp_path: config.youtube_service.ytdlp_path.clone(),
+            ytdlp_path: config
+                .youtube_service
+                .ytdlp_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "yt-dlp".to_string()),
             extra_args: config.youtube_service.ytdlp_extra_args.clone(),
             operation_timeout: config.youtube_service.operation_timeout,
             rate_limits: vec![
                 RateLimiterConfig {
-                    requests: config.youtube_service.requests_per_minute,
+                    requests: config.youtube_service.requests_per_minute as usize,
                     window: Duration::from_secs(60),
                 },
                 RateLimiterConfig {
-                    requests: config.youtube_service.requests_per_hour,
+                    requests: config.youtube_service.requests_per_hour as usize,
                     window: Duration::from_secs(3600),
                 },
             ],
@@ -42,7 +47,14 @@ impl YouTubeServiceFactory {
     
     pub fn create_from_config(config: &Config) -> Result<Arc<dyn YouTubeService>> {
         let client = Self::create_client(config);
-        let service_config = config.youtube_service.clone();
+        let service_config = YouTubeServiceConfig {
+            search_cache_ttl: config.youtube_cache_ttl,
+            stream_url_cache_ttl: config.youtube_cache_ttl,
+            song_info_cache_ttl: config.youtube_cache_ttl,
+            operation_timeout: config.youtube_service.operation_timeout,
+            cache_enabled: config.youtube_service.cache_enabled,
+            ..Default::default()
+        };
 
         let cache: Arc<dyn CacheService> = if service_config.cache_enabled {
             Arc::new(MemoryCacheService::new())
@@ -58,7 +70,14 @@ impl YouTubeServiceFactory {
     /// Useful for testing or specific use cases.
     pub fn create_with_null_cache(config: &Config) -> Result<Arc<dyn YouTubeService>> {
         let client = Self::create_client(config);
-        let service_config = config.youtube_service.clone();
+        let service_config = YouTubeServiceConfig {
+            search_cache_ttl: config.youtube_cache_ttl,
+            stream_url_cache_ttl: config.youtube_cache_ttl,
+            song_info_cache_ttl: config.youtube_cache_ttl,
+            operation_timeout: config.youtube_service.operation_timeout,
+            cache_enabled: false,
+            ..Default::default()
+        };
         let cache = Arc::new(NullCacheService::default());
 
         let service = YouTubeServiceImpl::new(service_config, client, cache);

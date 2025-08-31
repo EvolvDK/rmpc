@@ -72,9 +72,9 @@ impl YouTubeClient for MockYouTubeClient {
         let results = self.search_results.lock().unwrap().get(query).cloned().unwrap_or_default();
 
         for song in &results {
-            emitter.emit_search_result(song.clone(), context.generation).map_err(Into::into)?;
+            emitter.emit_search_result(song.clone(), context.generation).map_err(YouTubeError::from)?;
         }
-        emitter.emit_search_complete(context.generation, results.len()).map_err(Into::into)?;
+        emitter.emit_search_complete(context.generation, results.len()).map_err(YouTubeError::from)?;
 
         Ok(())
     }
