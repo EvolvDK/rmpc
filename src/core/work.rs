@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use crossbeam::channel::{Receiver, Sender};
@@ -6,86 +6,92 @@ use tokio::task::JoinHandle;
 
 use crate::{
     config::{cli_config::CliConfig, Config},
+    core::data_store::models::YouTubeSong,
     shared::{
-        events::{AppEvent, ClientRequest, WorkDone, WorkRequest},
+        events::{YouTubeStreamContext, AppEvent, ClientRequest, WorkDone, WorkRequest, IdentifiedYouTubeSong},
         lrc::LrcIndex,
         macros::try_skip,
         mpd_query::MpdCommand,
     },
-    youtube::{self, YouTubeCache},
+    youtube::{self, service::{YouTubeService, events::YouTubeEventEmitter}, error::YouTubeError},
 };
 
-/// Worker orchestrator - manages work execution and YouTube operations
+/// Worker orchestrator - manages all background work execution
 pub struct WorkerOrchestrator {
-    youtube_cache: YouTubeCache,
-    youtube_cache_ttl: Duration,
+    youtube_service: Arc<dyn YouTubeService>,
     current_search_handle: Option<JoinHandle<()>>,
 }
 
-
 impl WorkerOrchestrator {
-    pub(crate) fn new(config: &Config) -> Self {
+    pub(crate) fn new(youtube_service: Arc<dyn YouTubeService>) -> Self {
         Self {
-            youtube_cache: YouTubeCache::new(),
-            youtube_cache_ttl: config.youtube_cache_ttl,
+            youtube_service,
             current_search_handle: None,
         }
     }
 
-    /// Handles YouTube search requests with proper cancellation
+    /// Handles all incoming work requests by dispatching to the correct async handler.
+    async fn handle_work_request(
+        &mut self,
+        request: WorkRequest,
+        client_tx: Sender<ClientRequest>,
+        event_tx: Sender<AppEvent>,
+        config: &CliConfig,
+    ) {
+        let result = match request {
+            WorkRequest::YouTubeSearch { query, generation } => {
+                self.handle_youtube_search(query, generation, event_tx).await;
+                return; // Search is fire-and-forget with its own event emitters.
+            }
+            WorkRequest::Command(command) => {
+                self.handle_command_request(command, &client_tx, &event_tx, config).await
+            }
+            WorkRequest::IndexLyrics { lyrics_dir } => {
+                self.handle_index_lyrics_request(lyrics_dir, &event_tx).await
+            }
+            WorkRequest::IndexSingleLrc { path } => {
+                self.handle_single_lrc_request(path, &event_tx).await
+            }
+            WorkRequest::GetYouTubeStreamUrl { song, context } => {
+                self.handle_stream_url_request(song, context, event_tx.clone()).await
+            }
+            WorkRequest::YouTubeGetSongInfo { id } => {
+                self.handle_song_info_request(id, &event_tx).await
+            }
+        };
+
+        if let Err(err) = result {
+            try_skip!(
+                event_tx.send(AppEvent::WorkDone(Err(err))),
+                "Failed to send work done error"
+            );
+        }
+    }
+
+    /// Handles YouTube search requests with cancellation.
     async fn handle_youtube_search(
         &mut self,
         query: String,
         generation: u64,
         event_tx: Sender<AppEvent>,
     ) {
-        // Cancel previous search if it exists (SRP: single search at a time)
         if let Some(handle) = self.current_search_handle.take() {
             handle.abort();
         }
 
-        let cache_ref = self.youtube_cache.clone();
-        let ttl = self.youtube_cache_ttl;
-
+        let service = Arc::clone(&self.youtube_service);
         let new_handle = tokio::spawn(async move {
-            if let Err(err) = youtube::search(&cache_ref, &query, generation, ttl, event_tx).await {
-                log::error!("YouTube search failed: {}", err);
+            let emitter = youtube::integration::CrossbeamEventEmitter::new(event_tx);
+            let context = youtube::service::SearchContext {
+                generation,
+                ..Default::default()
+            };
+            if let Err(e) = service.search(&query, context, &emitter).await {
+                log::error!("YouTube search failed: {}", e);
+                let _ = emitter.emit_error(e.into(), "search");
             }
         });
         self.current_search_handle = Some(new_handle);
-    }
-
-    /// Handles non-search work requests
-    async fn handle_work_request(
-        &self,
-        request: WorkRequest,
-        client_tx: &Sender<ClientRequest>,
-        event_tx: &Sender<AppEvent>,
-        config: &CliConfig,
-    ) -> Result<()> {
-        match request {
-            WorkRequest::Command(command) => {
-                self.handle_command_request(command, client_tx, event_tx, config).await
-            }
-            WorkRequest::IndexLyrics { lyrics_dir } => {
-                self.handle_index_lyrics_request(lyrics_dir, event_tx).await
-            }
-            WorkRequest::IndexSingleLrc { path } => {
-                self.handle_single_lrc_request(path, event_tx).await
-            }
-            WorkRequest::GetYouTubeStreamUrl { song, context } => {
-                self.handle_stream_url_request(song, context, event_tx).await
-            }
-            WorkRequest::RefreshYouTubeStream { old_song_id, position, song } => {
-                self.handle_stream_refresh_request(old_song_id, position, song, event_tx).await
-            }
-            WorkRequest::YouTubeGetSongInfo { id } => {
-                self.handle_song_info_request(id, event_tx).await
-            }
-            WorkRequest::YouTubeSearch { .. } => {
-                unreachable!("YouTube search should be handled separately")
-            }
-        }
     }
 
     /// Handles MPD command execution (SRP: separated command handling)
@@ -129,46 +135,43 @@ impl WorkerOrchestrator {
         Ok(())
     }
 
-    /// Handles YouTube stream URL fetching (DIP: depends on cache abstraction)
+    /// Fetches a YouTube stream URL using the abstracted service. Handles both new and refresh requests.
     async fn handle_stream_url_request(
         &self,
-        song: crate::core::data_store::models::YouTubeSong,
-        context: Option<crate::shared::events::YouTubeStreamContext>,  // Changed to Option
-        event_tx: &Sender<AppEvent>,
+        song_to_refresh: IdentifiedYouTubeSong,
+        context: Option<YouTubeStreamContext>,
+        event_tx: Sender<AppEvent>,
     ) -> Result<()> {
-        let result = youtube::get_stream_url(&self.youtube_cache, &song.youtube_id, self.youtube_cache_ttl).await;
-        
-        let work_done = match result {
-            Ok(url) => WorkDone::YouTubeStreamUrlReady { url, song, context },
-            Err(_) => WorkDone::YouTubeStreamUrlFailed { song, context },
+        let song_result: Result<YouTubeSong, YouTubeError> = match song_to_refresh {
+            IdentifiedYouTubeSong::Full(song) => Ok(song),
+            IdentifiedYouTubeSong::IdOnly(ref id) => { 
+                log::info!("Metadata for song '{}' is missing, fetching for refresh...", id);
+                self.youtube_service.get_song_info(&id).await
+                    .and_then(|opt| opt.ok_or(YouTubeError::VideoUnavailable))
+                    .map(Into::into)
+            }
         };
-        
-        event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
-        Ok(())
-    }
-
-    /// Handles YouTube stream refresh (SRP: separated refresh logic)
-    async fn handle_stream_refresh_request(
-        &self,
-        old_song_id: u32,
-        position: u32,
-        song: crate::core::data_store::models::YouTubeSong,
-        event_tx: &Sender<AppEvent>,
-    ) -> Result<()> {
-        let result = youtube::get_stream_url(&self.youtube_cache, &song.youtube_id, self.youtube_cache_ttl).await;
-        
-        let work_done = match result {
-            Ok(new_url) => WorkDone::YouTubeStreamRefreshed {
-                new_url,
-                song,
-                old_song_id,
-                position,
-            },
-            Err(_) => WorkDone::YouTubeStreamRefreshFailed {
-                song_title: song.title,
-            },
+        let full_song = match song_result {
+            Ok(song) => song,
+            Err(e) => {
+                log::error!("Failed to fetch metadata during refresh: {:?}", e);
+                let work_done = WorkDone::YouTubeStreamUrlFailed {
+                    song: song_to_refresh, // Send back the original IdOnly variant.
+                    context,
+                    error: e,
+                };
+                event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
+                return Ok(());
+            }
         };
-        
+        let result: Result<String, YouTubeError> = self.youtube_service.get_stream_url(&full_song.youtube_id).await;
+        let work_done = match result {
+            Ok(url) => WorkDone::YouTubeStreamUrlReady { url, song: full_song, context },
+            Err(e) => {
+                log::warn!("Failed to get stream URL for '{}': {:?}", full_song.title, e);
+                WorkDone::YouTubeStreamUrlFailed { song: IdentifiedYouTubeSong::Full(full_song), context, error: e }
+            }
+        };
         event_tx.send(AppEvent::WorkDone(Ok(work_done)))?;
         Ok(())
     }
@@ -179,8 +182,19 @@ impl WorkerOrchestrator {
         id: String,
         event_tx: &Sender<AppEvent>,
     ) -> Result<()> {
-        if let Ok(Some(song)) = youtube::get_song_info(&self.youtube_cache, &id, self.youtube_cache_ttl).await {
-            event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFetched(song))))?;
+        match self.youtube_service.get_song_info(&id).await {
+            Ok(Some(song)) => {
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFetched(song.into()))))?;
+            }
+            Ok(None) => {
+                // Explicitly signal that the video could not be found.
+                let error = YouTubeError::VideoUnavailable;
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFailed { id, error })))?;
+            }
+            Err(e) => {
+                // Propagate other errors (network, command failed, etc.).
+                event_tx.send(AppEvent::WorkDone(Ok(WorkDone::YouTubeSongInfoFailed { id, error: e.into() })))?;
+            }
         }
         Ok(())
     }
@@ -192,6 +206,7 @@ pub fn init(
     client_tx: Sender<ClientRequest>,
     event_tx: Sender<AppEvent>,
     config: Arc<Config>,
+    youtube_service: Arc<dyn YouTubeService>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("work".to_owned())
@@ -201,75 +216,24 @@ pub fn init(
                 .build()
                 .expect("Failed to create tokio runtime");
 
-            rt.block_on(worker_loop(work_rx, client_tx, event_tx, config));
+            rt.block_on(worker_loop(work_rx, client_tx, event_tx, config, youtube_service));
         })
 }
 
-/// Main worker loop with improved separation of concerns
+/// Main worker loop.
 async fn worker_loop(
     work_rx: Receiver<WorkRequest>,
     client_tx: Sender<ClientRequest>,
     event_tx: Sender<AppEvent>,
     config: Arc<Config>,
+    youtube_service: Arc<dyn YouTubeService>,
 ) {
     let cli_config: CliConfig = config.as_ref().into();
-    let mut orchestrator = WorkerOrchestrator::new(&config);
+    let mut orchestrator = WorkerOrchestrator::new(youtube_service);
 
     while let Ok(request) = work_rx.recv() {
-        match request {
-            WorkRequest::YouTubeSearch { query, generation } => {
-                orchestrator
-                    .handle_youtube_search(query, generation, event_tx.clone())
-                    .await;
-            }
-            other_request => {
-                let client_tx_clone = client_tx.clone();
-                let event_tx_clone = event_tx.clone();
-                let cli_config_clone = cli_config.clone();
-
-                let youtube_cache_ref = orchestrator.youtube_cache.clone();
-                let youtube_cache_ttl = orchestrator.youtube_cache_ttl;
-
-                tokio::spawn(async move {
-                    let temp_orchestrator = WorkerOrchestrator {
-                        youtube_cache: youtube_cache_ref,
-                        youtube_cache_ttl,
-                        current_search_handle: None,
-                    };
-
-                    if let Err(err) = temp_orchestrator
-                        .handle_work_request(
-                            other_request,
-                            &client_tx_clone,
-                            &event_tx_clone,
-                            &cli_config_clone,
-                        )
-                        .await
-                    {
-                        try_skip!(
-                            event_tx_clone.send(AppEvent::WorkDone(Err(err))),
-                            "Failed to send work done error notification"
-                        );
-                    }
-                });
-            }
-        }
+        orchestrator
+            .handle_work_request(request, client_tx.clone(), event_tx.clone(), &cli_config)
+            .await;
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    #[test]
-    fn test_orchestrator_creation() {
-        let config = Config::default(); // Assuming Config has Default
-        let orchestrator = WorkerOrchestrator::new(&config);
-        
-        // Verify the orchestrator is properly initialized
-        assert!(orchestrator.current_search_handle.is_none());
-    }
-
-    // Additional tests would go here for each handler method
 }
