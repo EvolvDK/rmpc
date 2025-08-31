@@ -1287,7 +1287,6 @@ impl GlobalActionHandler {
                 GlobalAction::AddRandom => {
                     modal!(ctx, AddRandomModal::new(ctx));
                 }
-            _ => {}
         }
         Ok(KeyHandleResult::Handled)
     }
