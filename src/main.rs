@@ -18,6 +18,7 @@ use shared::{
 };
 
 use crate::{
+	youtube::{YouTubeServiceFactory, YouTubeServiceRegistry, YouTubeService},
     config::{
         ConfigFile,
         cli::{Args, Command},
@@ -49,6 +50,13 @@ mod mpd;
 mod shared;
 mod ui;
 mod youtube;
+
+fn setup_youtube_service(config: &config::Config) -> Result<Arc<dyn YouTubeService>> {
+    let mut registry = YouTubeServiceRegistry::new();
+    let default_service = YouTubeServiceFactory::create_from_config(config)?;
+    registry.register("default".to_string(), default_service, true);
+    registry.get_default()
+}
 
 fn main() -> Result<()> {
     let mut args = Args::parse();
@@ -277,16 +285,21 @@ fn main() -> Result<()> {
             client.set_write_timeout(Some(config.mpd_write_timeout))?;
 
             let tx_clone = event_tx.clone();
+            
+            let youtube_service =
+                setup_youtube_service(&config).context("Failed to initialize YouTube service")?;
 
             let data_store = DataStore::new().context("Failed to initialize data store")?;
+            // STEP 2: Inject the service into the Ctx.
             let ctx = Ctx::try_new(
                 &mut client,
-                config,
+                Arc::new(config),
                 data_store,
                 tx_clone,
                 worker_tx.clone(),
                 client_tx.clone(),
                 Scheduler::new((event_tx.clone(), client_tx.clone())),
+                youtube_service.clone(),
             )
             .context("Failed to create app context")?;
 
@@ -312,15 +325,6 @@ fn main() -> Result<()> {
                 client,
                 Arc::clone(&ctx.config),
             )?;
-            core::work::init(
-                worker_rx.clone(),
-                client_tx.clone(),
-                event_tx.clone(),
-                Arc::clone(&ctx.config),
-            )?;
-            let _sock_guard =
-                core::socket::init(event_tx.clone(), worker_tx.clone(), Arc::clone(&ctx.config))
-                    .context("Failed to initialize socket listener")?;
 
             let _config_watcher_guard = ctx.config.enable_config_hot_reload.then_some(
                 core::config_watcher::init(
@@ -336,7 +340,9 @@ fn main() -> Result<()> {
                 shared::terminal::setup(enable_mouse).context("Failed to setup terminal")?;
             core::input::init(event_tx.clone())?;
 
-            let event_loop_handle = core::event_loop::init(ctx, event_rx, terminal)?;
+            // STEP 3: Inject the service into the event loop initializer,
+            // which will then pass it to the worker thread.
+            let event_loop_handle = core::event_loop::init(ctx, event_rx, terminal, youtube_service)?;
 
             let original_hook = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |panic| {

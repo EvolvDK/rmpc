@@ -1,788 +1,647 @@
+use crate::{
+    config::{cli::RemoteCommandQuery, Config},
+    ctx::Ctx,
+    mpd::{
+        commands::{IdleEvent, Song, State, Status},
+        errors::{ErrorCode, MpdError},
+        mpd_client::{MpdClient, SaveMode},
+    },
+    youtube::service::YouTubeService,
+    shared::{
+        events::{AppEvent, IdentifiedYouTubeSong, WorkDone, WorkRequest, YouTubeStreamContext},
+        ext::error::ErrorExt,
+        id::Id,
+        key_event::KeyEvent,
+        macros::{status_error, status_warn},
+        mpd_query::{
+            run_status_update, EXTERNAL_COMMAND, GLOBAL_QUEUE_UPDATE, GLOBAL_STATUS_UPDATE,
+            GLOBAL_VOLUME_UPDATE, MpdQueryResult,
+        },
+        scheduler::TaskGuard,
+    },
+    ui::{
+        modals::info_modal::InfoModal, KeyHandleResult, StatusMessage, Ui, UiAppEvent, UiEvent,
+    },
+};
+use anyhow::Result;
+use crossbeam::channel::{Receiver, RecvTimeoutError};
+use ratatui::{prelude::Backend, layout::Rect, Terminal};
 use std::{
     collections::HashSet,
+    io::Write,
     ops::Sub,
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
-use crossbeam::channel::{Receiver, RecvTimeoutError};
-use ratatui::{Terminal, layout::Rect, prelude::Backend};
-
-use super::command::{create_env, run_external};
-use crate::{
-    config::cli::RemoteCommandQuery,
-    ctx::Ctx,
-    mpd::{
-        commands::{IdleEvent, State},
-        errors::{ErrorCode, MpdError, MpdFailureResponse},
-        mpd_client::{MpdClient, SaveMode},
-    },
-    shared::{
-        events::{AppEvent, WorkDone, WorkRequest},
-        ext::error::ErrorExt,
-        id::{self, Id},
-        macros::{status_error, status_warn, try_skip},
-        mpd_query::{
-            EXTERNAL_COMMAND,
-            GLOBAL_QUEUE_UPDATE,
-            GLOBAL_STATUS_UPDATE,
-            GLOBAL_VOLUME_UPDATE,
-            MpdQueryResult,
-            run_status_update,
-        },
-    },
-    ui::{KeyHandleResult, StatusMessage, Ui, UiAppEvent, UiEvent, modals::info_modal::InfoModal},
+use super::{
+	command::{create_env, run_external},
+	work,
 };
 
 static ON_RESIZE_SCHEDULE_ID: LazyLock<Id> = LazyLock::new(id::new);
 
-pub fn init<B: Backend + std::io::Write + Send + 'static>(
+// The `App` struct encapsulates all state and logic for the main event loop.
+// This is the heart of the application's runtime.
+struct App<'a, B: Backend + Write> {
     ctx: Ctx,
+    terminal: Terminal<B>,
+    ui: Ui<'a>,
+    last_render: Instant,
+    min_frame_duration: Duration,
+    update_loop_guard: Option<TaskGuard>,
+    update_db_loop_guard: Option<TaskGuard>,
+    tmux: Option<crate::shared::tmux::TmuxHooks>,
+    is_connected: bool,
+    render_wanted: bool,
+}
+
+impl<'a, B: Backend + Write> App<'a, B> {
+    /// Creates a new App instance, taking ownership of the terminal and UI.
+    fn new(mut ctx: Ctx, mut terminal: Terminal<B>) -> Result<Self> {
+        let size = terminal.size()?;
+        let mut ui = Ui::new(&ctx)?;
+        ui.before_show(size, &mut ctx)?;
+
+        let max_fps = f64::from(ctx.config.max_fps);
+        let min_frame_duration = Duration::from_secs_f64(1f64 / max_fps);
+
+        Ok(Self {
+            ctx,
+            terminal,
+            ui,
+            last_render: Instant::now().sub(Duration::from_secs(10)), // Render immediately on start
+            min_frame_duration,
+            update_loop_guard: None,
+            update_db_loop_guard: None,
+            tmux: None,
+            is_connected: true,
+            render_wanted: true, // Initial render
+        })
+    }
+    
+    /// Initializes tmux hooks and runs startup tasks.
+    fn init_startup_tasks(&mut self) {
+        self.tmux = match crate::shared::tmux::TmuxHooks::new() {
+            Ok(Some(val)) => Some(val),
+            Ok(None) => None,
+            Err(err) => {
+                log::error!(error:? = err; "Failed to install tmux hooks");
+                None
+            }
+        };
+
+        if self.ctx.config.exec_on_song_change_at_start
+            && self.ctx.find_current_song_in_queue().is_some()
+            && let Some(command) = &self.ctx.config.on_song_change
+        {
+            run_external(command.clone(), create_env(&self.ctx, std::iter::empty()));
+        }
+
+        match self.ctx.status.state {
+            State::Play => {
+                self.update_loop_guard = self
+                    .ctx
+                    .config
+                    .status_update_interval_ms
+                    .map(Duration::from_millis)
+                    .map(|interval| self.ctx.scheduler.repeated(interval, run_status_update));
+                self.ctx.song_played = Some(self.ctx.status.elapsed);
+            }
+            State::Pause => {
+                self.ctx.song_played = Some(self.ctx.status.elapsed);
+            }
+            State::Stop => {}
+        }
+    }
+    
+    /// Runs the main event loop until a quit event is received.
+    fn run(&mut self, event_rx: Receiver<AppEvent>) -> Result<()> {
+        self.init_startup_tasks();
+        while self.run_tick(&event_rx)? != KeyHandleResult::Quit {}
+        Ok(())
+    }
+    
+    /// Processes one "tick" of the event loop.
+    fn run_tick(&mut self, event_rx: &Receiver<AppEvent>) -> Result<KeyHandleResult> {
+        let now = Instant::now();
+        let timeout = if self.render_wanted {
+            self.min_frame_duration.checked_sub(now - self.last_render).unwrap_or_default()
+        } else {
+            // If no render is needed, wait a long time for the next event.
+            Duration::from_secs(60)
+        };
+
+        // Poll for events
+        let event = match event_rx.recv_timeout(timeout) {
+            Ok(event) => Some(event),
+            Err(RecvTimeoutError::Timeout) => None, // Timeout is for rendering, not an error
+            Err(RecvTimeoutError::Disconnected) => return Ok(KeyHandleResult::Quit),
+        };
+
+        // Handle the event if one was received
+        if let Some(app_event) = event {
+            if self.handle_app_event(app_event)? == KeyHandleResult::Quit {
+                return Ok(KeyHandleResult::Quit);
+            }
+        }
+
+        // Render the UI if needed
+        if self.render_wanted {
+            self.render()?;
+        }
+
+        Ok(KeyHandleResult::Handled)
+    }
+    
+    /// Renders one frame of the UI.
+    fn render(&mut self) -> Result<()> {
+        self.terminal.draw(|frame| {
+            if let Err(err) = self.ui.render(frame, &mut self.ctx) {
+                log::error!(error:? = err; "Failed to render a frame");
+            }
+        })?;
+        self.last_render = Instant::now();
+        self.render_wanted = false;
+        self.ctx.finish_frame();
+        Ok(())
+    }
+    
+    /// The main event dispatcher. All events from the channel are processed here.
+    fn handle_app_event(&mut self, event: AppEvent) -> Result<KeyHandleResult> {
+        let mut key_handle_result = KeyHandleResult::Handled;
+        match event {
+            AppEvent::UserKeyInput(key_event) => {
+                key_handle_result = self.handle_key_input(key_event)?;
+            }
+            AppEvent::UserMouseInput(mouse_event) => self.handle_mouse_input(mouse_event)?,
+            AppEvent::ConfigChanged { config, keep_old_theme } => {
+                self.handle_config_change(*config, keep_old_theme)?
+            }
+            AppEvent::ThemeChanged { theme } => self.handle_theme_change(*theme)?,
+            AppEvent::Status(msg, level, timeout) => self.handle_status_message(msg, level, timeout),
+            AppEvent::InfoModal { message, title, size, replacement_id } => {
+                self.handle_info_modal(message, title, size, replacement_id)?
+            }
+            AppEvent::IdleEvent(event) => self.handle_idle_event(event)?,
+            AppEvent::WorkDone(result) => self.handle_work_done(result)?,
+            AppEvent::Resized { columns, rows } => self.handle_resize(columns, rows),
+            AppEvent::ResizedDebounced { columns, rows } => self.handle_resize_debounced(columns, rows)?,
+            AppEvent::LostConnection => self.handle_connection_lost(),
+            AppEvent::Reconnected => self.handle_reconnected()?,
+            AppEvent::TmuxHook { hook } => self.handle_tmux_hook(hook)?,
+            AppEvent::UiEvent(event) => self.ui.on_ui_app_event(event, &mut self.ctx)?,
+            // Other events are handled inline for simplicity
+            AppEvent::RequestRender => {}
+            AppEvent::Log(msg) => self.ui.on_event(UiEvent::LogAdded(msg), &mut self.ctx)?,
+            AppEvent::RemoteSwitchTab { tab_name } => {
+				self.ui.on_ui_app_event(UiAppEvent::ChangeTab(tab_name.into()), &mut self.ctx)?
+			}
+            AppEvent::IpcQuery { stream, targets } => {
+				self.ui.on_ipc_query(stream, targets, &self.ctx) // TODO: Re-implement this with logic below
+				
+                //AppEvent::IpcQuery { mut stream, targets } => {
+                    //for target in targets {
+                        //match target {
+                            //RemoteCommandQuery::ActiveTab => {
+                                //stream
+                                    //.insert_response(target.to_string(), ctx.active_tab.0.as_str());
+                            //}
+                        //}
+                    //}
+                //}
+			}
+        };
+        // Any event that was handled likely requires a re-render.
+        self.render_wanted = true;
+        Ok(key_handle_result)
+    }
+    
+    // --- Specific Event Handlers (SRP Applied) ---
+
+    fn handle_key_input(&mut self, key_event: crossterm::event::KeyEvent) -> Result<KeyHandleResult> {
+        let mut key = KeyEvent { inner: key_event, already_handled: false };
+        self.ui.handle_key(&mut key, &mut self.ctx)
+    }
+    
+    fn handle_mouse_input(&mut self, mouse_event: crate::shared::mouse_event::MouseEvent) -> Result<()> {
+        self.ui.handle_mouse_event(mouse_event, &mut self.ctx)
+    }
+    
+    fn handle_config_change(&mut self, mut new_config: Config, keep_old_theme: bool) -> Result<()> {
+        new_config.album_art.method = self.ctx.config.album_art.method;
+        if keep_old_theme {
+            new_config.theme = self.ctx.config.theme.clone();
+        }
+        if let Err(err) = new_config.validate() {
+            status_error!(error:? = err; "Cannot change config, invalid value: '{err}'");
+            return Ok(());
+        }
+        self.ctx.config = Arc::new(new_config);
+        self.min_frame_duration = Duration::from_secs_f64(1f64 / f64::from(self.ctx.config.max_fps));
+        self.ui.on_event(UiEvent::ConfigChanged, &mut self.ctx)?;
+        self.terminal.clear()?;
+        Ok(())
+    }
+    
+    fn handle_theme_change(&mut self, theme: crate::config::theme::UiConfig) -> Result<()> {
+        let mut config = self.ctx.config.as_ref().clone();
+        config.theme = theme;
+        if let Err(err) = config.validate() {
+            status_error!(error:? = err; "Cannot change theme, invalid config: '{err}'");
+            return Ok(());
+        }
+        self.ctx.config = Arc::new(config);
+        self.ui.on_event(UiEvent::ConfigChanged, &mut self.ctx)?;
+        self.terminal.clear()?;
+        Ok(())
+    }
+
+    fn handle_status_message(&mut self, message: String, level: crate::shared::events::Level, timeout: Duration) {
+        self.ctx.messages.push(StatusMessage { level, timeout, message, created: Instant::now() });
+        self.ctx.scheduler.schedule(timeout, |(tx, _)| Ok(tx.send(AppEvent::RequestRender)?));
+    }
+
+    fn handle_info_modal(&mut self, message: Vec<String>, title: Option<String>, size: Option<crate::config::Size>, replacement_id: Option<String>) -> Result<()> {
+        let modal = InfoModal::builder()
+            .ctx(&self.ctx)
+            .maybe_title(title)
+            .maybe_size(size)
+            .maybe_replacement_id(replacement_id)
+            .message(message)
+            .build();
+        self.ui.on_ui_app_event(UiAppEvent::Modal(Box::new(modal)), &mut self.ctx)
+    }
+    
+    fn handle_idle_event(&mut self, event: IdleEvent) -> Result<()> {
+        let mut ui_events = HashSet::new();
+        handle_idle_event(event, &self.ctx, &mut ui_events);
+        for ev in ui_events {
+            self.ui.on_event(ev, &mut self.ctx)?;
+        }
+        Ok(())
+    }
+
+    fn handle_resize(&mut self, columns: u16, rows: u16) {
+        self.ctx.scheduler.schedule_replace(
+            *ON_RESIZE_SCHEDULE_ID,
+            Duration::from_millis(500),
+            move |(tx, _)| Ok(tx.send(AppEvent::ResizedDebounced { columns, rows })?),
+        );
+    }
+
+    fn handle_resize_debounced(&mut self, columns: u16, rows: u16) -> Result<()> {
+        self.ui.resize(Rect::new(0, 0, columns, rows), &self.ctx)?;
+        if let Some(cmd) = &self.ctx.config.on_resize {
+            let mut env = create_env(&self.ctx, std::iter::empty::<&str>());
+            env.push(("COLS".to_owned(), columns.to_string()));
+            env.push(("ROWS".to_owned(), rows.to_string()));
+            run_external(cmd.clone(), env);
+        }
+        self.terminal.clear()?;
+        Ok(())
+    }
+    
+    fn handle_reconnected(&mut self) -> Result<()> {
+        for ev in [IdleEvent::Player, IdleEvent::Playlist, IdleEvent::Options] {
+            self.handle_idle_event(ev)?;
+        }
+        self.ui.on_event(UiEvent::Reconnected, &mut self.ctx)?;
+        status_warn!("rmpc reconnected to MPD and will reinitialize");
+        self.is_connected = true;
+        Ok(())
+    }
+
+    fn handle_connection_lost(&mut self) {
+        if self.ctx.status.state != State::Stop {
+            self.update_loop_guard = None;
+            self.ctx.status.state = State::Stop;
+        }
+        if self.is_connected {
+            status_error!("rmpc lost connection to MPD and will try to reconnect");
+        }
+        self.is_connected = false;
+    }
+
+    fn handle_tmux_hook(&mut self, _hook: String) -> Result<()> {
+        if let Some(tmux) = &mut self.tmux {
+            let old_visible = tmux.visible;
+            tmux.update_visible()?;
+            let event = match (tmux.visible, old_visible) {
+                (true, false) => UiEvent::Displayed,
+                (false, true) => UiEvent::Hidden,
+                _ => return Ok(()),
+            };
+            self.ui.on_event(event, &mut self.ctx)?;
+        }
+        Ok(())
+    }
+    
+    fn handle_work_done(&mut self, result: Result<WorkDone>) -> Result<()> {
+        match result {
+            Ok(work) => match work {
+                WorkDone::LyricsIndexed { index } => {
+                    self.ctx.lrc_index = index;
+                    self.ui.on_event(UiEvent::LyricsIndexed, &mut self.ctx)?;
+                }
+                WorkDone::SingleLrcIndexed { lrc_entry } => {
+                    if let Some(lrc_entry) = lrc_entry {
+                        self.ctx.lrc_index.add(lrc_entry);
+                    }
+                    self.ui.on_event(UiEvent::LyricsIndexed, &mut self.ctx)?;
+                }
+                WorkDone::YouTubeSearchResult { song_info, generation } => {
+                    self.ui.on_youtube_search_result(song_info, generation, &mut self.ctx)?;
+                }
+                WorkDone::YouTubeSearchFinished { generation } => {
+                    self.ui.on_youtube_search_complete(generation, &mut self.ctx)?;
+                }
+                WorkDone::YouTubeStreamUrlReady { url, song, context } => {
+                    self.ui.on_youtube_stream_url_ready(url, song, context, &mut self.ctx)?;
+                }
+                WorkDone::YouTubeStreamUrlFailed { song, context, error } => {
+                    if let IdentifiedYouTubeSong::Full(full_song) = song {
+                        self.ui.on_youtube_stream_url_failed(full_song, context, error, &mut self.ctx)?;
+                    } else {
+                        status_error!("Stream URL failed for a song with only an ID, cannot display info.");
+                    }
+                }
+                WorkDone::YouTubeSongInfoFetched { song, context } => {
+                    if let Some(stream_context) = context {
+                        let request = WorkRequest::GetYouTubeStreamUrl {
+                            song: IdentifiedYouTubeSong::Full(song.clone()),
+                            context,
+                        };
+                        self.ctx.work_sender.send(request)?;
+                    }
+                    self.ui.on_youtube_song_info_fetched(song, &mut self.ctx)?;
+                }
+                WorkDone::YouTubeSongInfoFailed { id, error, context } => {
+                    status_warn!("Could not fetch info for YouTube video ID '{}': {}", id, error);
+                    if context.is_some() {
+                        status_error!("Failed to recover expired stream for video ID '{}'.", id);
+                    }
+                    self.ui.on_youtube_import_item_failed(&mut self.ctx)?;
+                }
+                WorkDone::MpdCommandFinished { id, target, data } => match (id, target, data) {
+                    (GLOBAL_STATUS_UPDATE, None, MpdQueryResult::Status { data, source_event }) => self.process_global_status_update(data, source_event)?,
+                    (GLOBAL_VOLUME_UPDATE, None, MpdQueryResult::Volume(volume)) => self.ctx.status.volume = volume,
+                    (GLOBAL_QUEUE_UPDATE, None, MpdQueryResult::Queue(queue)) => self.process_global_queue_update(queue.unwrap_or_default())?,
+                    (EXTERNAL_COMMAND, None, MpdQueryResult::ExternalCommand(cmd, songs)) => {
+                        run_external(cmd, create_env(&self.ctx, songs.iter().map(|s| s.file.as_str())));
+                    }
+                    _ => self.ui.on_command_finished(id, target, data, &mut self.ctx)?,
+                },
+                WorkDone::None => {}
+            },
+            Err(err) => {
+                if !try_handle_expired_stream_error(&err, &mut self.ctx, &mut self.ui) {
+                    status_error!("{}", err);
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    fn process_global_status_update(&mut self, new_status: Status, source_event: Option<IdleEvent>) -> Result<()> { 
+        let previous_status = std::mem::replace(&mut self.ctx.status, new_status);
+        let previous_state = previous_status.state;
+        let previous_song_id = previous_status.songid;
+
+        if self.ctx.config.reflect_changes_to_playlist && matches!(source_event, Some(IdleEvent::Playlist)) {
+            if let (Some(current_playlist), Some(new_playlist)) = (previous_status.lastloadedplaylist, self.ctx.status.lastloadedplaylist.as_ref()) {
+                if &current_playlist == new_playlist {
+                    self.ctx.command(move |client| {
+                        client.save_queue_as_playlist(&current_playlist, Some(SaveMode::Replace))?;
+                        Ok(())
+                    });
+                }
+            }
+        }
+
+        match (previous_status.updating_db, self.ctx.status.updating_db) {
+            (None, Some(_)) => {
+                self.ctx.db_update_start = Some(Instant::now());
+                self.update_db_loop_guard = Some(self.ctx.scheduler.repeated(Duration::from_secs(1), |(tx, _)| Ok(tx.send(AppEvent::RequestRender)?)));
+            }
+            (Some(_), None) => {
+                self.ctx.db_update_start = None;
+                self.update_db_loop_guard = None;
+            }
+            _ => {}
+        }
+        
+        if previous_state != self.ctx.status.state {
+            self.ui.on_event(UiEvent::PlaybackStateChanged, &mut self.ctx)?;
+        }
+
+        match self.ctx.status.state {
+            State::Play => {
+                if previous_state == State::Play {
+                    // Update played duration on continuous playback.
+                    if let Some(played) = &mut self.ctx.song_played {
+                        *played += self.ctx.last_status_update.elapsed();
+                    }
+                } else {
+                    // Transitioning into Play state, start the update loop.
+                    self.update_loop_guard = self.ctx.config.status_update_interval_ms
+                        .map(Duration::from_millis)
+                        .map(|interval| self.ctx.scheduler.repeated(interval, run_status_update));
+                }
+            }
+            State::Pause | State::Stop => self.update_loop_guard = None,
+        }
+
+        if self.ctx.status.songid != previous_song_id {
+            if let Some(command) = &self.ctx.config.on_song_change {
+                // Populate environment for on_song_change hook.
+                let mut env = create_env(&self.ctx, std::iter::empty());
+
+                // Find the file path of the previous song if it existed.
+                let prev_song_file = (previous_state != State::Stop)
+                    .then_some(
+                        previous_song_id
+                            .and_then(|id| self.ctx.queue.iter().find(|song| song.id == id))
+                            .map(|song| song.file.clone()),
+                    )
+                    .flatten();
+
+                // Add PREV_SONG and PREV_ELAPSED to the environment.
+                if let (Some(prev_file), Some(played_duration)) =
+                    (prev_song_file, self.ctx.song_played)
+                {
+                    env.push(("PREV_SONG".to_owned(), prev_file));
+                    env.push((
+                        "PREV_ELAPSED".to_owned(),
+                        played_duration.as_secs().to_string(),
+                    ));
+                }
+
+                run_external(command.clone(), env);
+            }
+            self.ctx.song_played = Some(Duration::ZERO);
+            self.ui.on_event(UiEvent::SongChanged, &mut self.ctx)?;
+        }
+        
+        if self.ctx.status.state == State::Stop {
+            self.ctx.song_played = None;
+        }
+
+        self.ctx.last_status_update = Instant::now();
+        Ok(())
+    }
+    
+    fn process_global_queue_update(&mut self, new_queue: Vec<Song>) -> Result<()> {
+        self.ctx.data_store.sync_queue_from_mpd(&new_queue)?;
+        
+        let db_song_ids = self.ctx.data_store.get_all_queue_song_ids()?;
+        let new_queue_song_ids: HashSet<u32> = new_queue.iter().map(|s| s.id).collect();
+        let ids_to_remove: Vec<u32> = db_song_ids.difference(&new_queue_song_ids).copied().collect();
+
+        if !ids_to_remove.is_empty() {
+            self.ctx.data_store.remove_songs_from_queue(&ids_to_remove)?;
+        }
+        
+        self.ctx.queue_youtube_ids = self.ctx.data_store.get_all_queue_youtube_mappings()?;
+        self.ctx.queue = new_queue;
+        Ok(())
+    }
+}
+
+/// The public entry point to start the event loop. It creates and runs the App.
+pub fn init<B: Backend + Write + Send + 'static>(
+    mut ctx: Ctx,
     event_rx: Receiver<AppEvent>,
+    work_rx: Receiver<WorkRequest>,
     terminal: Terminal<B>,
 ) -> std::io::Result<std::thread::JoinHandle<Terminal<B>>> {
     std::thread::Builder::new()
         .name("main".to_owned())
-        .spawn(move || main_task(ctx, event_rx, terminal))
+        .spawn(move || {
+            // Pass the service to the worker's init function.
+            work::init(
+                work_rx,
+                ctx.app_event_sender.clone(),
+                ctx.config.clone(),
+            )
+            .expect("Worker initialization failed");
+
+            let mut app = App::new(ctx, terminal).expect("App initialization failed");
+            if let Err(e) = app.run(event_rx) {
+                log::error!("Event loop terminated with error: {:?}", e);
+            }
+            app.terminal
+        })
 }
 
-fn main_task<B: Backend + std::io::Write>(
-    mut ctx: Ctx,
-    event_rx: Receiver<AppEvent>,
-    mut terminal: Terminal<B>,
-) -> Terminal<B> {
-    let size = terminal.size().expect("To be able to get terminal size");
-    let area = Rect::new(0, 0, size.width, size.height);
-    let mut ui = Ui::new(&ctx).expect("UI to be created correctly");
-    let event_receiver = event_rx;
-    let mut render_wanted = false;
-    let max_fps = f64::from(ctx.config.max_fps);
-    let mut min_frame_duration = Duration::from_secs_f64(1f64 / max_fps);
-    let mut last_render = std::time::Instant::now().sub(Duration::from_secs(10));
-    let mut additional_evs = HashSet::new();
-    let mut connected = true;
-    ui.before_show(area, &mut ctx).expect("Initial render init to succeed");
-    let mut _update_loop_guard = None;
-    let mut _update_db_loop_guard = None;
+fn parse_youtube_id_from_url(url: &str) -> Option<String> {
+    const PARAM: &str = "&rmpc_yt_id=";
+    url.find(PARAM)
+        .map(|i| &url[i + PARAM.len()..])
+        .and_then(|s| s.split('&').next())
+        .filter(|id| !id.is_empty())
+        .map(String::from)
+}
 
-    // Tmux hooks have to be initialized after ui, because ueberzugpp replaces all
-    // hooks on its init instead of simply appending and might break rmpc's hooks
-    let mut tmux = match crate::shared::tmux::TmuxHooks::new() {
-        Ok(Some(val)) => Some(val),
-        Ok(None) => None,
-        Err(err) => {
-            log::error!(error:? = err; "Failed to install tmux hooks");
-            None
+fn try_handle_expired_stream_error(err: &anyhow::Error, ctx: &mut Ctx, ui: &mut Ui) -> bool {
+    if let Some(MpdError::Mpd(response)) = err.downcast_ref::<MpdError>() {
+        if !is_youtube_url_error(&response.code, &response.command, &response.message) {
+            return false;
         }
-    };
 
-    // Execute on_song_change at startup if
-    // configured and current song is available.
-    if ctx.config.exec_on_song_change_at_start
-        && let Some((_, _song)) = ctx.find_current_song_in_queue()
-        && let Some(command) = &ctx.config.on_song_change
-    {
-        let env = create_env(&ctx, std::iter::empty());
-        run_external(command.clone(), env);
-    }
+        if let (Some(song_id), Some(pos)) = (ctx.status.songid, ctx.status.song) {
+            let context = YouTubeStreamContext {
+                old_song_id: song_id,
+                position: pos as usize,
+                play_after_refresh: true,
+            };
 
-    match ctx.status.state {
-        State::Play => {
-            // Start update loop since a song is playing on startup
-            _update_loop_guard = ctx
-                .config
-                .status_update_interval_ms
-                .map(Duration::from_millis)
-                .map(|interval| ctx.scheduler.repeated(interval, run_status_update));
-
-            ctx.song_played = Some(ctx.status.elapsed);
-        }
-        State::Pause => {
-            ctx.song_played = Some(ctx.status.elapsed);
-        }
-        State::Stop => {}
-    }
-
-    loop {
-        let now = std::time::Instant::now();
-
-        let event = if render_wanted {
-            match event_receiver.recv_timeout(
-                min_frame_duration.checked_sub(now - last_render).unwrap_or(Duration::ZERO),
-            ) {
-                Ok(v) => Some(v),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => None,
-            }
-        } else {
-            event_receiver.recv().ok()
-        };
-
-        if let Some(event) = event {
-            match event {
-                AppEvent::ConfigChanged { config: mut new_config, keep_old_theme } => {
-                    // Technical limitation. Keep the old image backend because it was not rechecked
-                    // anyway. Sending the escape sequences to determine image support would mess up
-                    // the terminal output at this point.
-                    new_config.album_art.method = ctx.config.album_art.method;
-                    if keep_old_theme {
-                        new_config.theme = ctx.config.theme.clone();
-                    }
-
-                    if let Err(err) = new_config.validate() {
-                        status_error!(error:? = err; "Cannot change config, invalid value: '{err}'");
-                        continue;
-                    }
-
-                    ctx.config = Arc::new(*new_config);
-                    let max_fps = f64::from(ctx.config.max_fps);
-                    min_frame_duration = Duration::from_secs_f64(1f64 / max_fps);
-
-                    if let Err(err) = ui.on_event(UiEvent::ConfigChanged, &mut ctx) {
-                        log::error!(error:? = err; "UI failed to handle config changed event");
-                        continue;
-                    }
-
-                    // Need to clear the terminal to avoid artifacts from album art and other
-                    // elements
-                    if let Err(err) = terminal.clear() {
-                        log::error!(error:? = err; "Failed to clear terminal after config change");
-                        continue;
-                    }
-
-                    render_wanted = true;
-                }
-                AppEvent::ThemeChanged { theme } => {
-                    let mut config = ctx.config.as_ref().clone();
-                    config.theme = *theme;
-                    if let Err(err) = config.validate() {
-                        status_error!(error:? = err; "Cannot change theme, invalid config: '{err}'");
-                        continue;
-                    }
-                    ctx.config = Arc::new(config);
-
-                    if let Err(err) = ui.on_event(UiEvent::ConfigChanged, &mut ctx) {
-                        log::error!(error:? = err; "UI failed to handle config changed event");
-                    }
-
-                    // Need to clear the terminal to avoid artifacts from album art and other
-                    // elements
-                    if let Err(err) = terminal.clear() {
-                        log::error!(error:? = err; "Failed to clear terminal after config change");
-                        continue;
-                    }
-                    render_wanted = true;
-                }
-                AppEvent::UserKeyInput(key) => match ui.handle_key(&mut key.into(), &mut ctx) {
-                    Ok(KeyHandleResult::None) => continue,
-                    Ok(KeyHandleResult::Quit) => {
-                        if let Err(err) = ui.on_event(UiEvent::Exit, &mut ctx) {
-                            log::error!(error:? = err, event:?; "UI failed to handle quit event");
-                        }
-                        break;
-                    }
-                    Err(err) => {
-                        status_error!(err:?; "Error: {}", err.to_status());
-                        render_wanted = true;
-                    }
-                },
-                AppEvent::UserMouseInput(ev) => match ui.handle_mouse_event(ev, &mut ctx) {
-                    Ok(()) => {}
-                    Err(err) => {
-                        status_error!(err:?; "Error: {}", err.to_status());
-                        render_wanted = true;
-                    }
-                },
-                AppEvent::Status(mut message, level, timeout) => {
-                    ctx.messages.push(StatusMessage {
-                        level,
-                        timeout,
-                        message: std::mem::take(&mut message),
-                        created: std::time::Instant::now(),
-                    });
-
-                    render_wanted = true;
-                    // Send delayed render event to make the status message
-                    // disappear
-                    ctx.scheduler
-                        .schedule(timeout, |(tx, _)| Ok(tx.send(AppEvent::RequestRender)?));
-                }
-                AppEvent::InfoModal { message, title, size, replacement_id: id } => {
-                    if let Err(err) = ui.on_ui_app_event(
-                        UiAppEvent::Modal(Box::new(
-                            InfoModal::builder()
-                                .ctx(&ctx)
-                                .maybe_title(title)
-                                .maybe_size(size)
-                                .maybe_replacement_id(id)
-                                .message(message)
-                                .build(),
-                        )),
-                        &mut ctx,
-                    ) {
-                        log::error!(error:? = err; "UI failed to handle modal event");
-                    }
-                }
-                AppEvent::Log(msg) => {
-                    if let Err(err) = ui.on_event(UiEvent::LogAdded(msg), &mut ctx) {
-                        log::error!(error:? = err; "UI failed to handle log event");
-                    }
-                }
-                AppEvent::IdleEvent(event) => {
-                    handle_idle_event(event, &ctx, &mut additional_evs);
-                    for ev in additional_evs.drain() {
-                        if let Err(err) = ui.on_event(ev, &mut ctx) {
-                            status_error!(error:? = err, event:?; "UI failed to handle idle event, event: '{:?}', error: '{}'", event, err.to_status());
-                        }
-                    }
-                    render_wanted = true;
-                }
-                AppEvent::RequestRender => {
-                    render_wanted = true;
-                }
-                AppEvent::WorkDone(Ok(result)) => match result {
-                    WorkDone::YouTubeSearchResult { song_info, generation } => {
-                        if let Err(err) = ui.on_youtube_search_result(song_info, generation, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle youtube search result event");
-                        }
-                    }
-                    WorkDone::YouTubeSearchFinished { generation } => {
-                        if let Err(err) = ui.on_youtube_search_complete(generation, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle youtube search complete event");
-                        }
-                    }
-                    WorkDone::YouTubeStreamUrlReady { url, song, context } => {
-                        if let Err(err) = ui.on_youtube_stream_url_ready(url, song, context, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle youtube stream url ready event");
-                        }
-                    }
-                    WorkDone::YouTubeStreamUrlFailed { song, context } => {
-                        if let Err(err) = ui.on_youtube_stream_url_failed(song, context, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle youtube stream url failed event");
-                        }
-                    }
-                    WorkDone::YouTubeSongInfoFetched(song) => {
-                        if let Err(err) = ui.on_youtube_song_info_fetched(song, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle youtube song info fetched event");
-                        }
-                    }
-                    WorkDone::YouTubeStreamRefreshed {
-                        new_url,
-                        song,
-                        old_song_id,
-                        position,
-                    } => {
-                        if let Err(err) =
-                            ui.on_youtube_stream_refreshed(new_url, song, old_song_id, position, &mut ctx)
-                        {
-                            log::error!(error:? = err; "UI failed to handle youtube stream refreshed event");
-                        }
-                    }
-                    WorkDone::YouTubeStreamRefreshFailed { song_title } => {
-                        status_error!("Failed to refresh stream for '{}'.", song_title);
-                        if ctx.status.state == State::Play {
-                            ctx.command(|client| {
-                                client.next()?;
-                                Ok(())
-                            });
-                        }
-                    }
-                    WorkDone::LyricsIndexed { index } => {
-                        ctx.lrc_index = index;
-                        if let Err(err) = ui.on_event(UiEvent::LyricsIndexed, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle lyrics indexed event");
-                        }
-                    }
-                    WorkDone::SingleLrcIndexed { lrc_entry } => {
-                        if let Some(lrc_entry) = lrc_entry {
-                            ctx.lrc_index.add(lrc_entry);
-                        }
-                        if let Err(err) = ui.on_event(UiEvent::LyricsIndexed, &mut ctx) {
-                            log::error!(error:? = err; "UI failed to handle single lyrics indexed event");
-                        }
-                    }
-                    WorkDone::MpdCommandFinished { id, target, data } => match (id, target, data) {
-                        (
-                            GLOBAL_STATUS_UPDATE,
-                            None,
-                            MpdQueryResult::Status { data: status, source_event },
-                        ) => {
-                            let current_song_id =
-                                ctx.find_current_song_in_queue().map(|(_, song)| song.id);
-                            let previous_state = ctx.status.state;
-                            let current_updating_db = ctx.status.updating_db;
-                            let current_playlist = ctx.status.lastloadedplaylist.take();
-                            let previous_status = std::mem::replace(&mut ctx.status, status);
-                            let new_playlist = ctx.status.lastloadedplaylist.as_ref();
-                            let mut song_changed = false;
-
-                            if ctx.config.reflect_changes_to_playlist
-                                && matches!(source_event, Some(IdleEvent::Playlist))
-                            {
-                                // Try to reflect changes to saved playlist if any was loaded both
-                                // before and after the update
-                                if let (Some(current_playlist), Some(new_playlist)) =
-                                    (current_playlist, new_playlist)
-                                {
-                                    if &current_playlist == new_playlist {
-                                        let playlist_name = current_playlist.clone();
-                                        ctx.command(move |client| {
-                                            client.save_queue_as_playlist(
-                                                &playlist_name,
-                                                Some(SaveMode::Replace),
-                                            )?;
-                                            Ok(())
-                                        });
-                                    }
-                                }
-                            }
-
-                            let mut start_render_loop = || {
-                                _update_db_loop_guard = Some(ctx.scheduler.repeated(
-                                    Duration::from_secs(1),
-                                    |(tx, _)| {
-                                        tx.send(AppEvent::RequestRender)?;
-                                        Ok(())
-                                    },
-                                ));
-                            };
-                            match (current_updating_db, ctx.status.updating_db) {
-                                (None, Some(_)) => {
-                                    // update of db started
-                                    ctx.db_update_start = Some(std::time::Instant::now());
-                                    start_render_loop();
-                                }
-                                (Some(_), Some(_)) if ctx.db_update_start.is_none() => {
-                                    // rmpc is opened after db started updating
-                                    // beforehand so we reassign
-                                    ctx.db_update_start = Some(std::time::Instant::now());
-                                    start_render_loop();
-                                }
-                                (Some(_), None) => {
-                                    // update of db ended
-                                    ctx.db_update_start = None;
-                                    _update_db_loop_guard = None;
-                                }
-                                _ => {}
-                            }
-
-                            if previous_state != ctx.status.state {
-                                if let Err(err) =
-                                    ui.on_event(UiEvent::PlaybackStateChanged, &mut ctx)
-                                {
-                                    status_error!(error:? = err; "UI failed to handle playback state changed event, error: '{}'", err.to_status());
-                                }
-                            }
-
-                            match ctx.status.state {
-                                State::Play if previous_state == ctx.status.state => {
-                                    if let Some(played) = &mut ctx.song_played {
-                                        *played += ctx.last_status_update.elapsed();
-                                    }
-                                }
-                                State::Play if previous_state != ctx.status.state => {
-                                    _update_loop_guard = ctx
-                                        .config
-                                        .status_update_interval_ms
-                                        .map(Duration::from_millis)
-                                        .map(|interval| {
-                                            ctx.scheduler.repeated(interval, run_status_update)
-                                        });
-                                }
-                                State::Play => {}
-                                State::Pause => {
-                                    _update_loop_guard = None;
-                                }
-                                State::Stop => {
-                                    song_changed = true;
-                                    ctx.song_played = None;
-                                    _update_loop_guard = None;
-                                }
-                            }
-
-                            if let Some((_, song)) = ctx.find_current_song_in_queue() {
-                                if Some(song.id) != current_song_id {
-                                    if let Some(command) = &ctx.config.on_song_change {
-                                        let mut env = create_env(&ctx, std::iter::empty());
-
-                                        let prev_song_file = (previous_status.state != State::Stop)
-                                            .then_some(
-                                                previous_status
-                                                    .songid
-                                                    .and_then(|id| {
-                                                        ctx.queue
-                                                            .iter()
-                                                            .enumerate()
-                                                            .find(|(_, song)| song.id == id)
-                                                    })
-                                                    .map(|(_, s)| s.file.clone()),
-                                            )
-                                            .flatten();
-
-                                        if let (Some(prev_song), Some(played)) =
-                                            (prev_song_file, ctx.song_played)
-                                        {
-                                            env.push(("PREV_SONG".to_owned(), prev_song));
-                                            env.push((
-                                                "PREV_ELAPSED".to_owned(),
-                                                played.as_secs().to_string(),
-                                            ));
-                                        }
-
-                                        run_external(command.clone(), env);
-                                    }
-                                    song_changed = true;
-                                    ctx.song_played = Some(Duration::ZERO);
-                                }
-                            }
-                            if song_changed {
-                                if let Err(err) = ui.on_event(UiEvent::SongChanged, &mut ctx) {
-                                    status_error!(error:? = err; "UI failed to handle idle event, error: '{}'", err.to_status());
-                                }
-                            }
-
-                            ctx.last_status_update = Instant::now();
-                            render_wanted = true;
-                        }
-                        ("global_volume_update", None, MpdQueryResult::Volume(volume)) => {
-                            ctx.status.volume = volume;
-                            render_wanted = true;
-                        }
-                        ("global_queue_update", None, MpdQueryResult::Queue(queue)) => {
-                            let new_queue = queue.unwrap_or_default();
-
-                            // 1. Synchronisation complète de la base de données
-                            if let Err(e) = ctx.data_store.sync_queue_from_mpd(&new_queue) {
-                                status_error!("Failed to add new songs to DB during sync: {}", e);
-                            }
-
-                            // 2. Nettoyage des anciennes entrées de la base de données
-                            if let Ok(db_song_ids) = ctx.data_store.get_all_queue_song_ids() {
-                                let new_queue_song_ids: HashSet<u32> =
-                                    new_queue.iter().map(|s| s.id).collect();
-                                let ids_to_remove: Vec<u32> = db_song_ids
-                                    .difference(&new_queue_song_ids)
-                                    .copied()
-                                    .collect();
-
-                                if !ids_to_remove.is_empty() {
-                                    if let Err(e) =
-                                        ctx.data_store.remove_songs_from_queue(&ids_to_remove)
-                                    {
-                                        status_error!(
-                                            "Failed to remove old songs from DB during sync: {}",
-                                            e
-                                        );
-                                    }
-                                }
-                            } else {
-                                status_error!(
-                                    "Failed to read queue song IDs from database for sync."
-                                );
-                            }
-
-                            // 3. Mise à jour du cache en mémoire
-                            match ctx.data_store.get_all_queue_youtube_mappings() {
-                                Ok(mappings) => ctx.queue_youtube_ids = mappings,
-                                Err(e) => {
-                                    status_error!("Failed to refresh YouTube ID cache after sync: {}", e)
-                                }
-                            }
-
-                            ctx.queue = new_queue;
-                            render_wanted = true;
-                        }
-                        (
-                            EXTERNAL_COMMAND,
-                            None,
-                            MpdQueryResult::ExternalCommand(command, songs),
-                        ) => {
-                            let songs = songs.iter().map(|s| s.file.as_str());
-                            run_external(command, create_env(&ctx, songs));
-                        }
-                        (id, target, data) => {
-                            if let Err(err) = ui.on_command_finished(id, target, data, &mut ctx) {
-                                log::error!(error:? = err; "UI failed to handle command finished event");
-                            }
-                        }
-                    },
-                    WorkDone::None => {}
-                },
-                AppEvent::WorkDone(Err(err)) => {
-                    if !handle_youtube_stream_error(&err, &mut ctx) {
-                        status_error!("{}", err);
-                    }
-                }
-                AppEvent::Resized { columns, rows } => {
-                    ctx.scheduler.schedule_replace(
-                        *ON_RESIZE_SCHEDULE_ID,
-                        Duration::from_millis(500),
-                        move |(tx, _)| {
-                            tx.send(AppEvent::ResizedDebounced { columns, rows })?;
-                            Ok(())
-                        },
-                    );
-                    render_wanted = true;
-                }
-                AppEvent::ResizedDebounced { columns, rows } => {
-                    if let Err(err) = ui.resize(Rect::new(0, 0, columns, rows), &ctx) {
-                        log::error!(error:? = err, event:?; "UI failed to handle resize event");
-                    }
-
-                    if let Some(cmd) = &ctx.config.on_resize {
-                        let cmd = Arc::clone(cmd);
-                        let mut env = create_env(&ctx, std::iter::empty::<&str>());
-                        env.push(("COLS".to_owned(), columns.to_string()));
-                        env.push(("ROWS".to_owned(), rows.to_string()));
-                        log::debug!("Executing on resize");
-                        run_external(cmd, env);
-                    }
-                    if let Err(err) = terminal.clear() {
-                        log::error!(error:? = err; "Failed to clear terminal after a resize");
-                    }
-                    render_wanted = true;
-                }
-                AppEvent::UiEvent(event) => match ui.on_ui_app_event(event, &mut ctx) {
-                    Ok(()) => {}
-                    Err(err) => {
-                        status_error!(err:?; "Error: {}", err.to_status());
-                        render_wanted = true;
-                    }
-                },
-                AppEvent::RemoteSwitchTab { tab_name } => {
-                    let target_tab = tab_name.as_str().into();
-
-                    if let Some(tab) =
-                        ctx.config.tabs.names.iter().find(|&name| *name == target_tab)
-                    {
-                        if let Err(err) =
-                            ui.on_ui_app_event(UiAppEvent::ChangeTab(tab.clone()), &mut ctx)
-                        {
-                            status_error!(err:?; "Error switching to tab '{}': {}", tab_name, err.to_status());
-                        }
+            match identify_song_for_refresh(song_id, &response.message, ctx) {
+                Some(IdentifiedYouTubeSong::Full(song)) => {
+                    // We have full metadata, proceed directly to get the stream URL.
+                    let request = WorkRequest::GetYouTubeStreamUrl {
+                        song: IdentifiedYouTubeSong::Full(song),
+                        context: Some(context),
+                    };
+                    if let Err(e) = ctx.work_sender.send(request) {
+                        log::error!("Failed to send YouTube stream refresh request: {}", e);
                     } else {
-                        let available = ctx
-                            .config
-                            .tabs
-                            .names
-                            .iter()
-                            .map(|name| name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        status_error!(
-                            "Tab '{}' does not exist. Available tabs: {}",
-                            tab_name,
-                            available
-                        );
-                    }
-                    render_wanted = true;
-                }
-                AppEvent::IpcQuery { mut stream, targets } => {
-                    for target in targets {
-                        match target {
-                            RemoteCommandQuery::ActiveTab => {
-                                stream
-                                    .insert_response(target.to_string(), ctx.active_tab.0.as_str());
-                            }
-                        }
+                        log::info!("Detected expired YouTube URL, triggering refresh for song: {}", song_id);
+                        return true;
                     }
                 }
-                AppEvent::Reconnected => {
-                    for ev in [IdleEvent::Player, IdleEvent::Playlist, IdleEvent::Options] {
-                        handle_idle_event(ev, &ctx, &mut additional_evs);
+                Some(IdentifiedYouTubeSong::IdOnly(id)) => {
+                    // We only have the ID. We must fetch metadata first.
+                    log::info!("Identified expired song by ID only ({}). Fetching full metadata before refreshing stream.", id);
+                    let request = WorkRequest::YouTubeGetSongInfo {
+                        id,
+                        context: Some(context), // Pass the context along
+                    };
+                    if ctx.work_sender.send(request).is_err() {
+                        log::error!("Failed to send YouTube info fetch request for refresh.");
                     }
-                    if let Err(err) = ui.on_event(UiEvent::Reconnected, &mut ctx) {
-                        log::error!(error:? = err, event:?; "UI failed to handle resize event");
-                    }
-                    status_warn!("rmpc reconnected to MPD and will reinitialize");
-                    connected = true;
+                    return true;
                 }
-                AppEvent::LostConnection => {
-                    if ctx.status.state != State::Stop {
-                        _update_loop_guard = None;
-                        ctx.status.state = State::Stop;
-                    }
-                    if connected {
-                        status_error!("rmpc lost connection to MPD and will try to reconnect");
-                    }
-                    connected = false;
-                }
-                AppEvent::TmuxHook { hook } => {
-                    if let Some(tmux) = &mut tmux {
-                        let old_visible = tmux.visible;
-                        if let Err(err) = tmux.update_visible() {
-                            log::error!(err:?, hook:?; "Failed to update tmux visibility");
-                            continue;
-                        }
-
-                        let event = match (tmux.visible, old_visible) {
-                            (true, false) => UiEvent::Displayed,
-                            (false, true) => UiEvent::Hidden,
-                            _ => continue,
-                        };
-
-                        match ui.on_event(event, &mut ctx) {
-                            Ok(()) => {}
-                            Err(err) => {
-                                status_error!(err:?; "Error: {}", err.to_status());
-                                render_wanted = true;
-                            }
-                        }
-                    }
+                None => {
+                    log::warn!("Could not identify YouTube song for refresh: song_id={}", song_id);
                 }
             }
-        }
-        if render_wanted {
-            let till_next_frame =
-                min_frame_duration.saturating_sub(now.duration_since(last_render));
-            if till_next_frame != Duration::ZERO {
-                continue;
-            }
-            terminal
-                .draw(|frame| {
-                    if let Err(err) = ui.render(frame, &mut ctx) {
-                        log::error!(error:? = err; "Failed to render a frame");
-                    }
-                })
-                .expect("Expected render to succeed");
-
-            ctx.finish_frame();
-            last_render = now;
-            render_wanted = false;
         }
     }
-
-    terminal
+    false
 }
 
-/// Gère spécifiquement l'erreur d'une URL de streaming YouTube expirée.
-/// Retourne `true` si l'erreur a été gérée, `false` sinon.
-fn handle_youtube_stream_error(err: &anyhow::Error, ctx: &mut Ctx) -> bool {
-    if let Some(MpdError::Mpd(MpdFailureResponse {
-        code,
-        command,
-        message,
-        ..
-    })) = err.downcast_ref::<MpdError>()
-    {
-        // Check if this looks like a YouTube URL error
-        let is_youtube_error = is_youtube_url_error(code, command, message);
-        
-        if is_youtube_error {
-            log::debug!(
-                "Detected potential YouTube URL error: code={:?}, command={}",
-                code,
-                command
-            );
-            
-            if let (Some(song_id), Some(pos)) = (ctx.status.songid, ctx.status.song) {
-                // CRITICAL: Cannot extract YouTube ID from truncated URL in error message
-                // Must rely on database fallback as primary method
-                match extract_youtube_id_for_refresh(song_id, ctx) {
-                    Some((youtube_id, song)) => {
-                        // Send refresh request
-                        match ctx.work_sender.send(WorkRequest::RefreshYouTubeStream {
-                            old_song_id: song_id,
-                            position: pos,
-                            song,
-                        }) {
-                            Ok(()) => {
-                                log::info!(
-                                    "Detected expired YouTube URL (truncated in logs), triggering refresh via database lookup: song_id={}, youtube_id={}, error_code={:?}",
-                                    song_id,
-                                    youtube_id,
-                                    code
-                                );
-                                return true; // Error handled successfully
-                            }
-                            Err(send_err) => {
-                                log::error!(
-                                    "Failed to send YouTube stream refresh request: song_id={}, error={:?}",
-                                    song_id,
-                                    send_err
-                                );
-                                return false;
-                            }
-                        }
-                    }
-                    None => {
-                        log::warn!(
-                            "Could not extract YouTube ID for refresh - song may not be from YouTube or not in database: song_id={}",
-                            song_id
-                        );
-                    }
-                }
-            } else {
-                log::warn!("Cannot refresh YouTube stream: no current song ID or position available");
-            }
-        }
-    }   
-    false // Error not handled
-}
 
 /// Determines if an MPD error is related to YouTube URL problems
 fn is_youtube_url_error(code: &ErrorCode, command: &str, message: &str) -> bool {
     match code {
-        // Case 1: File not found errors on playback commands
         ErrorCode::NoExist if matches!(command, "playid" | "playId") => true,
-        
-        // Case 2: HTTP 403 errors reported as unknown command (main case from logs)
         ErrorCode::UnknownCmd if matches!(command, "playid" | "playId") => {
             message.contains("HTTP status 403") || message.contains("got HTTP status 4")
         }
-        
-        // Case 3: System errors containing HTTP errors
         ErrorCode::System => {
             message.contains("HTTP status 403") 
                 || message.contains("HTTP status 410")  // Gone
                 || message.contains("HTTP status 404")  // Not found
                 || message.contains("Failed to decode")
         }
-        
-        // Case 4: Other playback-related errors that might indicate URL issues
         ErrorCode::PlayerSync if matches!(command, "playid" | "playId") => {
             message.contains("HTTP status") || message.contains("decode")
         }
-        
         _ => false,
     }
 }
 
-fn extract_youtube_id_for_refresh(song_id: u32, ctx: &Ctx) -> Option<(String, crate::core::data_store::models::YouTubeSong)> {
-    // Priority 1: Database query against queue_youtube_metadata table
-    match ctx.data_store.get_youtube_id_for_song(song_id) {
-        Ok(Some((youtube_id, _))) => {
-            // Priority 2: YouTube library cache lookup
-            if let Some(song) = ctx.youtube_library.get(&youtube_id).cloned() {
-                log::debug!(
-                    "Successfully extracted YouTube ID from database and library cache: song_id={}, youtube_id={}",
-                    song_id,
-                    youtube_id
-                );
-                return Some((youtube_id, song));
-            } else {
-                log::warn!(
-                    "YouTube ID found in database but song not in library cache: song_id={}, youtube_id={}",
-                    song_id,
-                    youtube_id
-                );
-            }
-        }
-        Ok(None) => {
-            log::debug!("Song is not a YouTube song (no entry in database): song_id={}", song_id);
-        }
-        Err(db_err) => {
-            log::error!(
-                "Failed to query YouTube ID from database: song_id={}, error={:?}",
-                song_id,
-                db_err
-            );
-        }
+fn identify_song_for_refresh(
+    song_id: u32,
+    error_message: &str,
+    ctx: &Ctx,
+) -> Option<IdentifiedYouTubeSong> {
+    // Priority 1: Parse the ID directly from the failed URL in the error message.
+    if let Some(youtube_id) = parse_youtube_id_from_url(error_message) {
+        log::debug!("Identified YouTube song via URL parsing: {}", youtube_id);
+        // We found the ID. Now, check if we have the full metadata in the cache.
+        // If not, that's okay! We'll return `IdOnly`.
+        return Some(
+            ctx.youtube_library
+                .get(&youtube_id)
+                .cloned()
+                .map(IdentifiedYouTubeSong::Full)
+                .unwrap_or(IdentifiedYouTubeSong::IdOnly(youtube_id)),
+        );
     }
 
-    // Could add Priority 3: MPD song 'file' field parsing if available
-    // This would require access to the current song from ctx.queue
-    // But since we already have song_id, the database should be sufficient
+    // Priority 2: Fallback to the database lookup for older or unusual cases.
+    log::debug!("Falling back to database lookup for song_id={}", song_id);
+    if let Ok(Some((youtube_id, _))) = ctx.data_store.get_youtube_id_for_song(song_id) {
+        return Some(
+            ctx.youtube_library
+                .get(&youtube_id)
+                .cloned()
+                .map(IdentifiedYouTubeSong::Full)
+                .unwrap_or(IdentifiedYouTubeSong::IdOnly(youtube_id)),
+        );
+    }
 
     None
 }
