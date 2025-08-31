@@ -13,8 +13,7 @@ use crate::{
     },
     youtube::{
         ResolvedYouTubeSong,
-        controllers::YouTubeSearchController,
-        controllers::search_controller::FilteredSearchResult,
+        YouTubeSearchController,
     },
 };
 use anyhow::Result;
@@ -280,7 +279,7 @@ impl Component for SearchComponent {
     fn handle_mouse_event(
         &mut self,
         event: MouseEvent,
-        _ctx: &mut Ctx,
+        _ctx: &Ctx,
         _is_focused: bool,
     ) -> Result<ActionOutcome> {
         let pos = Position::from(event);

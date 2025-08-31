@@ -29,7 +29,6 @@ use self::{
 use crate::{
     core::data_store::models::{PlaylistItem, YouTubeSong},
     MpdQueryResult,
-    shared::events::AppEvent,
     config::{
         Config,
         cli::Args,
@@ -50,8 +49,9 @@ use crate::{
         version::Version,
         QueuePosition,
     },
+    youtube::error::YouTubeError,
     shared::{
-        events::{Level, WorkRequest},
+        events::{AppEvent, Level, WorkRequest},
         id::Id,
         key_event::KeyEvent,
         macros::{modal, status_error, status_info, status_warn},
@@ -92,6 +92,8 @@ pub struct Ui<'ui> {
     area: Rect,
     pending_youtube_imports: usize,
     pending_playlist_import: Vec<PendingPlaylistImport>,
+    action_handler: GlobalActionHandler,
+    event_handler: UiEventHandler,
 }
 
 const OPEN_DECODERS_MODAL: &str = "open_decoders_modal";
@@ -106,32 +108,15 @@ macro_rules! active_tab_call {
     }
 }
 
+/// Handles the logic for executing global key actions.
+#[derive(Default, Debug)]
+struct GlobalActionHandler;
+
+/// Handles the logic for processing internal UI App Events.
+#[derive(Default, Debug)]
+struct UiEventHandler;
+
 impl<'ui> Ui<'ui> {
-    fn get_youtube_master_library(&mut self, ctx: &mut Ctx) -> Result<HashMap<String, YouTubeSong>> {
-        Ok(ctx
-            .data_store
-            .get_all_library_songs()?
-            .into_iter()
-            .map(|v| (v.youtube_id.clone(), v))
-            .collect())
-    }
-
-    fn sync_songs_to_playlists_pane(
-        &mut self,
-        songs_to_sync: &[YouTubeSong],
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        if !songs_to_sync.is_empty() {
-            if let Panes::RmpcPlaylists(p) = self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
-                for song in songs_to_sync {
-                    p.add_song(song);
-                }
-            }
-        }
-        Ok(())
-    }
-
-
     pub fn new(ctx: &Ctx) -> Result<Ui<'ui>> {
         Ok(Self {
             panes: PaneContainer::new(ctx)?,
@@ -141,6 +126,8 @@ impl<'ui> Ui<'ui> {
             tabs: Self::init_tabs(ctx)?,
             pending_youtube_imports: 0,
             pending_playlist_import: Vec::new(),
+            action_handler: GlobalActionHandler::default(),
+            event_handler: UiEventHandler::default(),
         })
     }
 
@@ -242,20 +229,770 @@ impl<'ui> Ui<'ui> {
             Ok(())
         })
     }
-
+    
     pub fn handle_key(&mut self, key: &mut KeyEvent, ctx: &mut Ctx) -> Result<KeyHandleResult> {
         if let Some(ref mut modal) = self.modals.last_mut() {
             modal.handle_key(key, ctx)?;
-            return Ok(KeyHandleResult::None);
+            return Ok(KeyHandleResult::Handled);
         }
 
         active_tab_call!(self, ctx, handle_action(key, ctx))?;
 
         if let Some(action) = key.as_global_action(ctx) {
-            match action {
+            return self.action_handler.handle(action.clone(), self, ctx);
+        }
+
+        Ok(KeyHandleResult::Ignored)
+    }
+
+    pub fn before_show(&mut self, area: Rect, ctx: &mut Ctx) -> Result<()> {
+        self.calc_areas(area, ctx);
+
+        self.layout.for_each_pane(self.area, &mut |pane, pane_area, _, _| {
+            match self.panes.get_mut(&pane.pane, ctx)? {
+                Panes::TabContent => {
+                    active_tab_call!(self, ctx, before_show(pane_area, ctx))?;
+                }
+                mut pane_instance => {
+                    pane_call!(pane_instance, calculate_areas(pane_area, ctx))?;
+                    pane_call!(pane_instance, before_show(ctx))?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub fn on_youtube_search_result(
+        &mut self,
+        song_info: crate::youtube::ResolvedYouTubeSong,
+        generation: u64,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
+            p.on_search_result(song_info, generation);
+        }
+        Ok(ctx.render()?)
+    }
+
+    pub fn on_youtube_search_complete(&mut self, generation: u64, ctx: &mut Ctx) -> Result<()> {
+        if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
+            p.on_search_complete(generation);
+        }
+        Ok(ctx.render()?)
+    }
+
+    pub fn on_youtube_stream_url_ready(
+        &mut self,
+        url: String,
+        song: YouTubeSong,
+        context: Option<crate::shared::events::YouTubeStreamContext>,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        let title = song.title.clone();
+
+        ctx.query().id("add_youtube_song_to_mpd_queue").query(move |client| {
+            let tagged_url = crate::youtube::append_youtube_id_to_url(url, &song.youtube_id);
+            
+            let (position, play_after_add) = if let Some(ctx) = context {
+                client.delete_id(ctx.old_song_id)?;
+                (Some(QueuePosition::Absolute(ctx.position)), ctx.play_after_refresh)
+            } else {
+                (None, false)
+            };
+            
+            let song_id = client.add_id(&tagged_url, position)?
+                .id
+                .context("MPD did not return an ID for the song")?;
+                
+            if play_after_add {
+                client.play_id(song_id)?;
+            }
+            
+            Ok(MpdQueryResult::YouTubeSongAdded { song_id, song })
+        });
+        status_info!("Added '{}' to queue", title);
+        Ok(ctx.render()?)
+    }
+
+    pub fn on_youtube_stream_url_failed(
+        &mut self,
+        song: YouTubeSong,
+        _context: Option<crate::shared::events::YouTubeStreamContext>,
+        error: YouTubeError,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        match error {
+            // Case 1: The video is permanently gone. Suggest removing it.
+            YouTubeError::VideoUnavailable => {
+                status_error!(
+                    "Video for '{}' is unavailable (deleted, private, etc.).",
+                    song.title
+                );
+                ctx.app_event_sender
+                    .send(AppEvent::UiEvent(UiAppEvent::PromptToRemoveSong(song)))?;
+            }
+            // Case 2: A temporary or configuration issue. Show an informative status message.
+            YouTubeError::NetworkError(_) | YouTubeError::Timeout(_) => {
+                status_warn!(
+                    "A network error occurred while fetching '{}'. Please try again later.",
+                    song.title
+                );
+            }
+            YouTubeError::RateLimitExceeded => {
+                 status_warn!("Rate limit exceeded. Please wait a moment before fetching more songs.");
+            }
+            // Case 3: A critical setup issue.
+            YouTubeError::YtDlpNotFound | YouTubeError::CommandFailed(_) => {
+                 status_error!(
+                    "Could not fetch stream: yt-dlp is not working correctly. Please check your installation."
+                );
+            }
+            // Default fallback for other errors.
+            _ => {
+                status_error!("Could not fetch stream for '{}': {}", song.title, error);
+            }
+        }
+        Ok(ctx.render()?)
+    }
+
+    pub fn on_youtube_song_info_fetched(&mut self, song: YouTubeSong, ctx: &mut Ctx) -> Result<()> {
+        self.on_ui_app_event(UiAppEvent::YouTubeLibraryAddSongs(vec![song]), ctx)?;
+
+        if self.pending_youtube_imports > 0 {
+            self.pending_youtube_imports -= 1;
+            if self.pending_youtube_imports == 0 {
+                if !self.pending_playlist_import.is_empty() {
+                    ctx.app_event_sender
+                        .send(AppEvent::UiEvent(UiAppEvent::FinalizePlaylistImport))?;
+                } else {
+                    status_info!("YouTube library import complete.");
+                }
+            }
+        }
+        Ok(ctx.render()?)
+    }
+    
+    pub fn on_queue_youtube_song(&self, song: YouTubeSong, ctx: &mut Ctx) -> Result<()> {
+        let queue_ids = ctx.data_store.get_all_queue_youtube_ids()?;
+        if queue_ids.contains(&song.youtube_id) {
+            status_info!("'{}' is already in the queue.", song.title);
+            return Ok(ctx.render()?);
+        }
+ 
+        status_info!("Fetching stream URL for '{}'...", song.title);
+        let request = WorkRequest::GetYouTubeStreamUrl {
+            song,
+            context: None,
+        };
+        ctx.work_sender.send(request)?;
+        Ok(ctx.render()?)
+    }
+
+    pub fn add_playlist_items_to_queue(
+        &mut self,
+        items: Vec<PlaylistItem>,
+        replace: bool,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        if replace {
+            ctx.data_store.clear_queue()?;
+            ctx.command(|client| {
+                client.clear()?;
+                Ok(())
+            });
+        }
+
+        let library_songs = &ctx.youtube_library;
+        let mut added_count = 0;
+        let mut skipped_count = 0;
+
+        // Fetch existing items from the queue.
+        let (mut existing_yt_ids, mut existing_local_files) = if replace {
+            (std::collections::HashSet::new(), std::collections::HashSet::new())
+        } else {
+            (
+                ctx.data_store.get_all_queue_youtube_ids()?,
+                ctx.queue.iter().map(|s| s.file.clone()).collect(),
+            )
+        };
+
+        for item in items {
+            // Check against the locally tracked sets, then update them.
+            let is_duplicate = match &item {
+                PlaylistItem::Local(path) => !existing_local_files.insert(path.clone()),
+                PlaylistItem::YouTube(song) => !existing_yt_ids.insert(song.youtube_id.clone()),
+            };
+
+            if is_duplicate {
+                skipped_count += 1;
+                continue;
+            }
+
+            added_count += 1;
+            match item {
+                PlaylistItem::Local(path) => {
+                    ctx.command(move |client| {
+                        client.add(&path, None)?;
+                        Ok(())
+                    });
+                }
+                PlaylistItem::YouTube(song) => {
+                    if let Some(song) = library_songs.get(&song.youtube_id) {
+						ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
+							song: crate::shared::events::IdentifiedYouTubeSong::Full(song.clone()),
+							context: None,
+						})?;
+                    } else {
+                        status_warn!(
+                            "Could not find YouTube song with ID {} in library, skipping.",
+                            song.youtube_id
+                        );
+                        added_count -= 1; // It was not actually added
+                    }
+                }
+            }
+        }
+
+        if added_count > 0 && skipped_count > 0 {
+            status_info!(
+                "Added {} items to queue ({} duplicates ignored).",
+                added_count,
+                skipped_count
+            );
+        } else if added_count > 0 {
+            status_info!("Added {} items to queue.", added_count);
+        } else if skipped_count > 0 {
+            status_info!("All {} items were already in the queue.", skipped_count);
+        }
+
+        Ok(())
+    }
+
+    pub fn on_add_items_to_playlist(
+        &mut self,
+        name: &str,
+        items_to_add: Vec<PlaylistItem>,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+		if let Some(playlist_id) = ctx.data_store.find_playlist_id_by_name(name)? {
+            for item in items_to_add {
+                match item {
+                    PlaylistItem::Local(path) => {
+                        ctx.data_store.add_local_file_to_playlist(playlist_id, &path)?;
+                    }
+                    PlaylistItem::YouTube(song) => {
+                        ctx.data_store.add_song_to_library(&song)?;
+                        ctx.data_store
+                            .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
+                    }
+                }
+            }
+        } else {
+            return Err(anyhow!("Playlist '{}' not found", name));
+        }
+
+        status_info!("Playlist '{}' updated.", name);
+        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+        Ok(())
+    }
+    
+    fn on_create_playlist(&self, name: &str, ctx: &mut Ctx) -> Result<()> {
+        if !name.is_empty() {
+            match ctx.data_store.create_playlist(name) {
+                Ok(_) => {
+                    ctx.app_event_sender
+                        .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+                    status_info!("Created playlist '{}'", name);
+                }
+                Err(e) => status_error!("Failed to create playlist: {}", e),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn on_create_playlist_from_items(
+        &mut self,
+        name: &str,
+        items: Vec<PlaylistItem>,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        let playlist_id = ctx.data_store.create_playlist(name)?;
+        for item in items.iter() {
+            match item {
+                PlaylistItem::Local(path) => {
+                    ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
+                }
+                PlaylistItem::YouTube(song) => {
+                    ctx.data_store.add_song_to_library(song)?;
+                    ctx.data_store
+                        .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
+                }
+            }
+        }
+
+        status_info!("Created playlist '{}' with {} items", name, items.len());
+        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+        Ok(())
+    }
+    
+	pub fn on_youtube_import_item_failed(&mut self, ctx: &mut Ctx) -> Result<()> {
+		if self.pending_youtube_imports > 0 {
+			self.pending_youtube_imports -= 1;
+		    if self.pending_youtube_imports == 0 {
+				if !self.pending_playlist_import.is_empty() {
+					ctx.app_event_sender
+						.send(AppEvent::UiEvent(UiAppEvent::FinalizePlaylistImport))?;
+				} else {
+					// If this was the last item and it failed, the message should reflect that.
+					status_info!("YouTube library import finished.");
+				}
+			}
+		}
+		Ok(ctx.render()?)
+	}
+
+    pub fn on_import_youtube_library(&mut self, path: PathBuf, ctx: &mut Ctx) -> Result<()> {
+        status_info!("Starting library import from {:?}...", path);
+
+        #[derive(Debug, Deserialize)]
+        struct TakeoutSong {
+            #[serde(rename = "ID vidéo")]
+            song_id: String,
+        }
+
+		let all_song_ids = ctx.data_store.get_all_library_song_ids()?;
+
+        let mut reader = csv::Reader::from_path(path)?;
+        let mut count = 0;
+        for result in reader.deserialize() {
+            let record: TakeoutSong = result?;
+            if !all_song_ids.contains(&record.song_id) {
+                ctx.work_sender
+                    .send(WorkRequest::YouTubeGetSongInfo { id: record.song_id })?;
+                count += 1;
+            }
+        }
+
+        if count > 0 {
+            self.pending_youtube_imports = count;
+            status_info!("Importing {} new songs in the background.", count);
+        } else {
+            status_info!("No new songs to import.");
+        }
+        Ok(())
+    }
+
+    pub fn on_import_youtube_playlists(&mut self, path: PathBuf, ctx: &mut Ctx) -> Result<()> {
+        status_info!("Starting playlists import from {:?}...", path);
+
+        #[derive(Debug, Deserialize)]
+        struct TakeoutSong {
+            #[serde(rename = "ID vidéo")]
+            song_id: String,
+        }
+
+        let mut pending_playlists = Vec::new();
+        let mut all_required_song_ids = std::collections::HashSet::new();
+
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "csv") {
+                if let Some(playlist_name) = path.file_stem().and_then(|s| s.to_str()) {
+                    let mut reader = csv::Reader::from_path(&path)?;
+                    let mut song_ids = Vec::new();
+                    for result in reader.deserialize() {
+                        let record: TakeoutSong = result?;
+                        all_required_song_ids.insert(record.song_id.clone());
+                        song_ids.push(record.song_id);
+                    }
+                    pending_playlists.push(PendingPlaylistImport {
+                        name: playlist_name.to_string(),
+                        song_ids,
+                    });
+                }
+            }
+        }
+		let existing_library_ids = ctx.data_store.get_all_library_song_ids()?;
+
+        let missing_song_ids: Vec<_> = all_required_song_ids
+            .difference(&existing_library_ids)
+            .cloned()
+            .collect();
+
+        if !missing_song_ids.is_empty() {
+            self.pending_youtube_imports = missing_song_ids.len();
+            self.pending_playlist_import = pending_playlists;
+            status_info!(
+                "Importing {} playlists. Fetching info for {} new songs...",
+                self.pending_playlist_import.len(),
+                self.pending_youtube_imports
+            );
+            for song_id in missing_song_ids {
+                ctx.work_sender.send(WorkRequest::YouTubeGetSongInfo { id: song_id })?;
+            }
+        } else {
+            self.pending_playlist_import = pending_playlists;
+            self.on_finalize_playlist_import(ctx)?;
+        }
+
+        Ok(())
+    }
+
+    fn on_finalize_playlist_import(&mut self, ctx: &mut Ctx) -> Result<()> {
+        let pending = std::mem::take(&mut self.pending_playlist_import);
+        let playlist_count = pending.len();
+        for playlist_to_import in pending {
+            let playlist_id = match ctx.data_store.create_playlist(&playlist_to_import.name) {
+                Ok(id) => id,
+                Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
+                    status_warn!("Playlist '{}' already exists, skipping.", playlist_to_import.name);
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            for song_id in playlist_to_import.song_ids {
+                ctx.data_store
+                    .add_youtube_song_to_playlist(playlist_id, &song_id)?;
+            }
+        }
+
+        status_info!("Successfully imported {} playlists.", playlist_count);
+        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+        Ok(())
+    }
+    
+    fn on_rename_playlist(&self, id: i64, old_name: &str, new_name: &str, ctx: &mut Ctx) -> Result<()> {
+        if !new_name.is_empty() && new_name != old_name {
+            if let Err(e) = ctx.data_store.rename_playlist(id, new_name) {
+                status_error!("Failed to rename playlist: {}", e);
+            } else {
+                ctx.app_event_sender
+                    .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+            }
+        }
+        Ok(())
+    }
+    
+    fn on_delete_playlist(&self, id: i64, ctx: &mut Ctx) -> Result<()> {
+        if let Err(e) = ctx.data_store.delete_playlist(id) {
+            status_error!("Failed to delete playlist: {}", e);
+        } else {
+            ctx.app_event_sender
+                .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+        }
+        Ok(())
+    }
+
+    fn on_save_command(&mut self, name: &str, ctx: &mut Ctx) -> Result<()> {
+        let items: Vec<PlaylistItem> = ctx
+            .queue
+            .iter()
+            .map(|song| PlaylistItem::Local(song.file.clone()))
+            .collect();
+
+        if items.is_empty() {
+            status_info!("Queue is empty, nothing to save.");
+            return Ok(());
+        }
+
+        let playlist_id = match ctx.data_store.create_playlist(name) {
+            Ok(id) => id,
+            Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
+                let existing_id = ctx
+                    .data_store
+                    .find_playlist_id_by_name(name)?
+                    .context("Failed to find playlist that should exist")?;
+                ctx.data_store.delete_playlist(existing_id)?;
+                ctx.data_store.create_playlist(name)?
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        for item in items.iter() {
+            if let PlaylistItem::Local(path) = item {
+                ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
+            }
+        }
+
+        status_info!("Saved {} items to playlist '{}'", items.len(), name);
+        ctx.app_event_sender
+            .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+        Ok(())
+    }
+
+    fn on_load_command(&mut self, name: &str, ctx: &mut Ctx) -> Result<()> {
+        let items = match ctx.data_store.get_playlist_by_name(name)? {
+            Some(playlist) => playlist.items,
+            None => {
+                status_error!("Failed to load playlist '{}': not found.", name);
+                return Ok(());
+            }
+        };
+
+        let library_songs = &ctx.youtube_library;
+
+        status_info!("Loading {} items from playlist '{}'...", items.len(), name);
+        for item in items {
+            match item {
+                PlaylistItem::Local(path) => {
+                    ctx.command(move |client| {
+                        client.add(&path, None)?;
+                        Ok(())
+                    });
+                }
+                PlaylistItem::YouTube(song) => {
+                    let id = song.youtube_id;
+                    if let Some(song) = library_songs.get(&id) {
+                        ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
+                            song: song.clone(),
+                            context: None,
+                        })?;
+                    } else {
+                        status_warn!("Could not find YouTube song with ID {} in library, skipping.", id);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn on_ui_app_event(&mut self, event: UiAppEvent, ctx: &mut Ctx) -> Result<()> {
+        self.event_handler.handle(event, self, ctx)
+    }
+
+    pub fn handle_command(&mut self, cmd_str: String, ctx: &mut Ctx) -> Result<()> {
+        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+        match parts.as_slice() {
+            ["save", name] => {
+                self.on_save_command(name, ctx)?;
+            }
+            ["load", name] => {
+                self.on_load_command(name, ctx)?;
+            }
+            ["importlibrary", path] => {
+                ctx.app_event_sender
+                    .send(AppEvent::UiEvent(UiAppEvent::ImportYouTubeLibrary {
+                        path: PathBuf::from(path),
+                    }))?;
+            }
+            ["importplaylists", path] => {
+                ctx.app_event_sender
+                    .send(AppEvent::UiEvent(UiAppEvent::ImportYouTubePlaylists {
+                        path: PathBuf::from(path),
+                    }))?;
+            }
+            _ => {
+                // Fallback to original behavior
+                if let Ok(Args { command: Some(cmd), .. }) = cmd_str.parse() {
+                    if ctx.work_sender.send(WorkRequest::Command(cmd)).is_err() {
+                        log::error!("Failed to send command");
+                    }
+                } else {
+                    status_error!("Unknown command or invalid arguments: {}", cmd_str);
+                }
+            }
+        }
+        Ok(ctx.render()?)
+    }
+
+    pub fn resize(&mut self, area: Rect, ctx: &Ctx) -> Result<()> {
+        log::trace!(area:?; "Terminal was resized");
+        self.calc_areas(area, ctx);
+
+        self.layout.for_each_pane(self.area, &mut |pane, pane_area, _, _| {
+            match self.panes.get_mut(&pane.pane, ctx)? {
+                Panes::TabContent => {
+                    active_tab_call!(self, ctx, resize(pane_area, ctx))?;
+                }
+                mut pane_instance => {
+                    pane_call!(pane_instance, calculate_areas(pane_area, ctx))?;
+                    pane_call!(pane_instance, resize(pane_area, ctx))?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub fn on_event(&mut self, mut event: UiEvent, ctx: &mut Ctx) -> Result<()> {
+        match event {
+            UiEvent::Exit => {}
+            UiEvent::Database => {
+                status_warn!(
+                    "The music database has been updated. Some parts of the UI may have been reinitialized to prevent inconsistent behaviours."
+                );
+            }
+            UiEvent::ConfigChanged => {
+                // Call on_hide for all panes in the current tab and current layout because they
+                // might not be visible after the change
+                self.layout.for_each_pane(self.area, &mut |pane, _, _, _| {
+                    match self.panes.get_mut(&pane.pane, ctx)? {
+                        Panes::TabContent => {
+                            active_tab_call!(self, ctx, on_hide(ctx))?;
+                        }
+                        mut pane_instance => {
+                            pane_call!(pane_instance, on_hide(ctx))?;
+                        }
+                    }
+                    Ok(())
+                })?;
+
+                self.layout = ctx.config.theme.layout.clone();
+                let new_active_tab = ctx
+                    .config
+                    .tabs
+                    .names
+                    .iter()
+                    .find(|tab| tab == &&ctx.active_tab)
+                    .or(ctx.config.tabs.names.first())
+                    .context("Expected at least one tab")?;
+
+                let mut old_other_panes = std::mem::take(&mut self.panes.others);
+                for (key, new_other_pane) in PaneContainer::init_other_panes(ctx) {
+                    let old = old_other_panes.remove(&key);
+                    self.panes.others.insert(key, old.unwrap_or(new_other_pane));
+                }
+                // We have to be careful about the order of operations here as they might cause
+                // a panic if done incorrectly
+                self.tabs = Self::init_tabs(ctx)?;
+                ctx.active_tab = new_active_tab.clone();
+                self.on_event(UiEvent::TabChanged(new_active_tab.clone()), ctx)?;
+
+                // Call before_show here, because we have "hidden" all the panes before and this
+                // will force them to reinitialize
+                self.before_show(self.area, ctx)?;
+            }
+            _ => {}
+        }
+
+        for pane_type in &ctx.config.active_panes {
+            let visible = self
+                .tabs
+                .get(&ctx.active_tab)
+                .is_some_and(|tab| tab.panes.panes_iter().any(|pane| pane.pane == *pane_type))
+                || self.layout.panes_iter().any(|pane| pane.pane == *pane_type);
+
+            match self.panes.get_mut(pane_type, ctx)? {
+                #[cfg(debug_assertions)]
+                Panes::Logs(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Queue(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Directories(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Albums(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Artists(p) => p.on_event(&mut event, visible, ctx),
+                Panes::RmpcPlaylists(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Search(p) => p.on_event(&mut event, visible, ctx),
+                Panes::YouTube(p) => p.on_event(&mut event, visible, ctx),
+                Panes::AlbumArtists(p) => p.on_event(&mut event, visible, ctx),
+                Panes::AlbumArt(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Lyrics(p) => p.on_event(&mut event, visible, ctx),
+                Panes::ProgressBar(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Header(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Tabs(p) => p.on_event(&mut event, visible, ctx),
+                #[cfg(debug_assertions)]
+                Panes::FrameCount(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Others(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Cava(p) => p.on_event(&mut event, visible, ctx),
+                // Property and the dummy TabContent pane do not need to receive events
+                Panes::Property(_) | Panes::TabContent => Ok(()),
+            }?;
+        }
+
+        for modal in &mut self.modals {
+            modal.on_event(&mut event, ctx)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn on_command_finished(
+        &mut self,
+        id: &'static str,
+        pane: Option<PaneType>,
+        data: MpdQueryResult,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        match pane {
+            Some(pane_type) => {
+                let visible =
+                    self.tabs.get(&ctx.active_tab).is_some_and(|tab| {
+                        tab.panes.panes_iter().any(|pane| pane.pane == pane_type)
+                    }) || self.layout.panes_iter().any(|pane| pane.pane == pane_type);
+
+                match self.panes.get_mut(&pane_type, ctx)? {
+                    #[cfg(debug_assertions)]
+                    Panes::Logs(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Queue(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Directories(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Albums(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Artists(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::RmpcPlaylists(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Search(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::YouTube(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::AlbumArtists(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::AlbumArt(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Lyrics(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::ProgressBar(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Header(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Tabs(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Others(p) => p.on_query_finished(id, data, visible, ctx),
+                    #[cfg(debug_assertions)]
+                    Panes::FrameCount(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Cava(p) => p.on_query_finished(id, data, visible, ctx),
+                    // Property and the dummy TabContent pane do not need to receive command
+                    // notifications
+                    Panes::Property(_) | Panes::TabContent => Ok(()),
+                }?;
+            }
+            None => match (id, data) {
+                (OPEN_OUTPUTS_MODAL, MpdQueryResult::Outputs(outputs)) => {
+                    modal!(ctx, OutputsModal::new(outputs));
+                }
+                (OPEN_DECODERS_MODAL, MpdQueryResult::Decoders(decoders)) => {
+                    modal!(ctx, DecodersModal::new(decoders));
+                }
+                (
+                    "add_youtube_song_to_mpd_queue",
+                    MpdQueryResult::YouTubeSongAdded { song_id, song },
+                ) => {
+                    // This now calls a function that ONLY syncs the queue database, not the library.
+                    self.sync_new_youtube_song_in_queue(song_id, song, ctx)?;
+                }
+                (id, mut data) => {
+                    for modal in &mut self.modals {
+                        modal.on_query_finished(id, &mut data, ctx)?;
+                    }
+                }
+            },
+        }
+
+        Ok(())
+    }
+    
+    fn sync_new_youtube_song_in_queue(&mut self, song_id: u32, song: YouTubeSong, ctx: &mut Ctx) -> Result<()> {
+        // This links the temporary MPD song ID to the permanent YouTube ID in our local DB.
+        ctx.data_store.add_youtube_song_to_queue(song_id, &song.youtube_id)?;
+        // This updates the in-memory map for the current session.
+        ctx.queue_youtube_ids.insert(song_id, song.youtube_id.clone());
+        Ok(())
+    }
+}
+
+impl GlobalActionHandler {
+    fn handle(&self, action: GlobalAction, ui: &mut Ui, ctx: &mut Ctx) -> Result<KeyHandleResult> {
+        match action {
+            GlobalAction::Quit => return Ok(KeyHandleResult::Quit),
+            GlobalAction::NextTab => {
+                ui.change_tab(ctx.config.next_screen(&ctx.active_tab), ctx)?;
+                ctx.render()?;
+            }
+            GlobalAction::PreviousTab => {
+                ui.change_tab(ctx.config.prev_screen(&ctx.active_tab), ctx)?;
+                ctx.render()?;
+            }
                 GlobalAction::Partition { name: Some(name), autocreate } => {
                     let name = name.clone();
-                    let autocreate = *autocreate;
+                    let autocreate = autocreate;
                     ctx.command(move |client| {
                         match client.switch_to_partition(&name) {
                             Ok(()) => {}
@@ -497,17 +1234,9 @@ impl<'ui> Ui<'ui> {
                         Ok(())
                     });
                 }
-                GlobalAction::NextTab => {
-                    self.change_tab(ctx.config.next_screen(&ctx.active_tab), ctx)?;
-                    ctx.render()?;
-                }
-                GlobalAction::PreviousTab => {
-                    self.change_tab(ctx.config.prev_screen(&ctx.active_tab), ctx)?;
-                    ctx.render()?;
-                }
                 GlobalAction::SwitchToTab(name) => {
-                    if ctx.config.tabs.names.contains(name) {
-                        self.change_tab(name.clone(), ctx)?;
+                    if ctx.config.tabs.names.contains(&name) {
+                        ui.change_tab(name.clone(), ctx)?;
                         ctx.render()?;
                     } else {
                         status_error!(
@@ -524,7 +1253,6 @@ impl<'ui> Ui<'ui> {
                 GlobalAction::ExternalCommand { command, .. } => {
                     run_external(command.clone(), create_env(ctx, std::iter::empty::<&str>()));
                 }
-                GlobalAction::Quit => return Ok(KeyHandleResult::Quit),
                 GlobalAction::ShowHelp => {
                     let modal = KeybindsModal::new(ctx);
                     modal!(ctx, modal);
@@ -563,518 +1291,18 @@ impl<'ui> Ui<'ui> {
                 GlobalAction::AddRandom => {
                     modal!(ctx, AddRandomModal::new(ctx));
                 }
-            }
+            _ => { /* ... other actions ... */ }
         }
-
-        Ok(KeyHandleResult::None)
+        Ok(KeyHandleResult::Handled)
     }
+}
 
-    pub fn before_show(&mut self, area: Rect, ctx: &mut Ctx) -> Result<()> {
-        self.calc_areas(area, ctx);
-
-        self.layout.for_each_pane(self.area, &mut |pane, pane_area, _, _| {
-            match self.panes.get_mut(&pane.pane, ctx)? {
-                Panes::TabContent => {
-                    active_tab_call!(self, ctx, before_show(pane_area, ctx))?;
-                }
-                mut pane_instance => {
-                    pane_call!(pane_instance, calculate_areas(pane_area, ctx))?;
-                    pane_call!(pane_instance, before_show(ctx))?;
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn on_youtube_search_result(
-        &mut self,
-        song_info: crate::youtube::ResolvedYouTubeSong,
-        generation: u64,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.on_search_result(song_info, generation);
-        }
-        Ok(ctx.render()?)
-    }
-
-    pub fn on_youtube_search_complete(&mut self, generation: u64, ctx: &mut Ctx) -> Result<()> {
-        if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.on_search_complete(generation);
-        }
-        Ok(ctx.render()?)
-    }
-
-    pub fn on_youtube_stream_url_ready(
-        &mut self,
-        url: String,
-        song: YouTubeSong,
-        context: Option<crate::shared::events::RefreshContext>,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        log::info!("Adding YouTube song to queue, ID: {}", song.youtube_id);
-        let title = song.title.clone();
-        if let Some(context) = context {
-            // This is a refresh for an existing song
-            ctx.query()
-                .id("refresh_youtube_song")
-                .query(move |client| {
-                    client.delete_id(context.old_song_id)?;
-                    let tagged_url =
-                        crate::youtube::append_youtube_id_to_url(url, &song.youtube_id);
-                    let song_id = client
-                        .add_id(&tagged_url, Some(QueuePosition::Absolute(context.position)))?
-                        .id
-                        .context("MPD did not return an ID for the refreshed song")?;
-
-                    if context.play_after_refresh {
-                        client.play_id(song_id)?;
-                    }
-
-                    Ok(MpdQueryResult::YouTubeSongAdded { song_id, song })
-                });
-            status_info!("Refreshed '{}' in queue", title);
-        } else {
-            // This is a new song
-            ctx.query().id("add_youtube_song").query(move |client| {
-                let tagged_url =
-                    crate::youtube::append_youtube_id_to_url(url, &song.youtube_id);
-                let song_id = client
-                    .add_id(&tagged_url, None)?
-                    .id
-                    .context("MPD did not return an ID for the added song")?;
-                Ok(MpdQueryResult::YouTubeSongAdded { song_id, song })
-            });
-            status_info!("Added '{}' to queue", title);
-        }
-        Ok(ctx.render()?)
-    }
-
-    pub fn on_youtube_stream_refreshed(
-        &mut self,
-        url: String,
-        song: YouTubeSong,
-        old_song_id: u32,
-        position: u32,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        ctx.query()
-            .id("refresh_youtube_song")
-            .query(move |client| {
-                client.delete_id(old_song_id)?;
-                let tagged_url =
-                    crate::youtube::append_youtube_id_to_url(url, &song.youtube_id);
-                let song_id = client
-                    .add_id(&tagged_url, Some(QueuePosition::Absolute(position as usize)))?
-                    .id
-                    .context("MPD did not return an ID for the refreshed song")?;
-                client.play_id(song_id)?;
-                Ok(MpdQueryResult::YouTubeSongAdded { song_id, song })
-            });
-        Ok(())
-    }
-
-    pub fn on_youtube_stream_url_failed(
-        &mut self,
-        song: YouTubeSong,
-        _context: Option<crate::shared::events::RefreshContext>,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        status_error!(
-            "Could not fetch stream for '{}'. The song may have been deleted.",
-            song.title
-        );
-
-        let modal = menu::modal::MenuModal::new(ctx)
-            .list_section(ctx, |section| {
-                Some(
-                    section
-                        .item("Remove from library?", |_| Ok(()))
-                        .item("Yes", move |ctx| {
-                            ctx.app_event_sender.send(AppEvent::UiEvent(
-                                UiAppEvent::YouTubeLibraryRemoveSong(song.youtube_id),
-                            ))?;
-                            Ok(())
-                        })
-                        .item("No", |_| Ok(())),
-                )
-            })
-            .build();
-
-        modal!(ctx, modal);
-        Ok(ctx.render()?)
-    }
-
-    pub fn on_youtube_song_info_fetched(&mut self, song: YouTubeSong, ctx: &mut Ctx) -> Result<()> {
-        ctx.data_store.add_song_to_library(&song)?;
-        ctx.youtube_library.insert(song.youtube_id.clone(), song.clone());
-        self.sync_songs_to_playlists_pane(&[song.clone()], ctx)?;
-
-        if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.add_song(song);
-        }
-
-        if self.pending_youtube_imports > 0 {
-            self.pending_youtube_imports -= 1;
-            if self.pending_youtube_imports == 0 {
-                if !self.pending_playlist_import.is_empty() {
-                    ctx.app_event_sender
-                        .send(AppEvent::UiEvent(UiAppEvent::FinalizePlaylistImport))?;
-                } else {
-                    status_info!("YouTube library import complete.");
-                }
-            }
-        }
-        Ok(ctx.render()?)
-    }
-
-    pub fn on_youtube_library_remove_song(&mut self, song_id: &str, ctx: &mut Ctx) -> Result<()> {
-        ctx.data_store.remove_song_from_library(song_id)?;
-        if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-            p.remove_song(song_id);
-        }
-        if let Panes::RmpcPlaylists(p) = self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
-            p.remove_song(song_id);
-        }
-        status_info!("Removed song from library.");
-        Ok(ctx.render()?)
-    }
-
-    pub fn add_playlist_items_to_queue(
-        &mut self,
-        items: Vec<PlaylistItem>,
-        replace: bool,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        if replace {
-            ctx.data_store.clear_queue()?;
-            ctx.command(|client| {
-                client.clear()?;
-                Ok(())
-            });
-        }
-
-        let library_songs = self.get_youtube_master_library(ctx)?;
-        let mut added_count = 0;
-        let mut skipped_count = 0;
-
-        let (existing_yt_ids, existing_local_files) = if replace {
-            (std::collections::HashSet::new(), std::collections::HashSet::new())
-        } else {
-            (
-                ctx.data_store.get_all_queue_youtube_ids()?,
-                ctx.queue.iter().map(|s| s.file.clone()).collect(),
-            )
-        };
-
-        for item in items {
-            let is_duplicate = match &item {
-                PlaylistItem::Local(path) => existing_local_files.contains(path),
-                PlaylistItem::YouTube(song) => existing_yt_ids.contains(&song.youtube_id),
-            };
-
-            if is_duplicate {
-                skipped_count += 1;
-                continue;
-            }
-
-            added_count += 1;
-            match item {
-                PlaylistItem::Local(path) => {
-                    ctx.command(move |client| {
-                        client.add(&path, None)?;
-                        Ok(())
-                    });
-                }
-                PlaylistItem::YouTube(song) => {
-                    if let Some(song) = library_songs.get(&song.youtube_id) {
-                        ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                            song: song.clone(),
-                            context: None,
-                        })?;
-                    } else {
-                        status_warn!(
-                            "Could not find YouTube song with ID {} in library, skipping.",
-                            song.youtube_id
-                        );
-                        added_count -= 1; // It was not actually added
-                    }
-                }
-            }
-        }
-
-        if added_count > 0 && skipped_count > 0 {
-            status_info!(
-                "Added {} items to queue ({} duplicates ignored).",
-                added_count,
-                skipped_count
-            );
-        } else if added_count > 0 {
-            status_info!("Added {} items to queue.", added_count);
-        } else if skipped_count > 0 {
-            status_info!("All {} items were already in the queue.", skipped_count);
-        }
-
-        Ok(())
-    }
-
-    pub fn on_add_items_to_playlist(
-        &mut self,
-        name: &str,
-        items_to_add: Vec<PlaylistItem>,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        let playlist_id =
-            ctx.data_store.get_all_playlists()?.into_iter().find(|p| p.name == name).map(|p| p.id);
-
-        if let Some(playlist_id) = playlist_id {
-            for item in items_to_add {
-                match item {
-                    PlaylistItem::Local(path) => {
-                        ctx.data_store.add_local_file_to_playlist(playlist_id, &path)?;
-                    }
-                    PlaylistItem::YouTube(song) => {
-                        ctx.data_store.add_song_to_library(&song)?;
-                        ctx.data_store
-                            .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
-                    }
-                }
-            }
-        } else {
-            return Err(anyhow!("Playlist '{}' not found", name));
-        }
-
-        status_info!("Playlist '{}' updated.", name);
-        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
-        Ok(())
-    }
-
-    pub fn on_create_playlist_from_items(
-        &mut self,
-        name: &str,
-        items: Vec<PlaylistItem>,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        let playlist_id = ctx.data_store.create_playlist(name)?;
-        for item in items.iter() {
-            match item {
-                PlaylistItem::Local(path) => {
-                    ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
-                }
-                PlaylistItem::YouTube(song) => {
-                    ctx.data_store.add_song_to_library(song)?;
-                    ctx.data_store
-                        .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
-                }
-            }
-        }
-
-        status_info!("Created playlist '{}' with {} items", name, items.len());
-        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
-        Ok(())
-    }
-
-    pub fn on_import_youtube_library(&mut self, path: PathBuf, ctx: &mut Ctx) -> Result<()> {
-        status_info!("Starting library import from {:?}...", path);
-
-        #[derive(Debug, Deserialize)]
-        struct TakeoutSong {
-            #[serde(rename = "ID vidéo")]
-            song_id: String,
-        }
-
-        let library = ctx.data_store.get_all_library_songs()?;
-        let all_song_ids: std::collections::HashSet<String> =
-            library.into_iter().map(|v| v.youtube_id).collect();
-
-        let mut reader = csv::Reader::from_path(path)?;
-        let mut count = 0;
-        for result in reader.deserialize() {
-            let record: TakeoutSong = result?;
-            if !all_song_ids.contains(&record.song_id) {
-                ctx.work_sender
-                    .send(WorkRequest::YouTubeGetSongInfo { id: record.song_id })?;
-                count += 1;
-            }
-        }
-
-        if count > 0 {
-            self.pending_youtube_imports = count;
-            status_info!("Importing {} new songs in the background.", count);
-        } else {
-            status_info!("No new songs to import.");
-        }
-        Ok(())
-    }
-
-    pub fn on_import_youtube_playlists(&mut self, path: PathBuf, ctx: &mut Ctx) -> Result<()> {
-        status_info!("Starting playlists import from {:?}...", path);
-
-        #[derive(Debug, Deserialize)]
-        struct TakeoutSong {
-            #[serde(rename = "ID vidéo")]
-            song_id: String,
-        }
-
-        let mut pending_playlists = Vec::new();
-        let mut all_required_song_ids = std::collections::HashSet::new();
-
-        for entry in std::fs::read_dir(path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_file() && path.extension().is_some_and(|ext| ext == "csv") {
-                if let Some(playlist_name) = path.file_stem().and_then(|s| s.to_str()) {
-                    let mut reader = csv::Reader::from_path(&path)?;
-                    let mut song_ids = Vec::new();
-                    for result in reader.deserialize() {
-                        let record: TakeoutSong = result?;
-                        all_required_song_ids.insert(record.song_id.clone());
-                        song_ids.push(record.song_id);
-                    }
-                    pending_playlists.push(PendingPlaylistImport {
-                        name: playlist_name.to_string(),
-                        song_ids,
-                    });
-                }
-            }
-        }
-
-        let existing_library_ids: std::collections::HashSet<String> = ctx
-            .data_store
-            .get_all_library_songs()?
-            .into_iter()
-            .map(|v| v.youtube_id)
-            .collect();
-
-        let missing_song_ids: Vec<_> = all_required_song_ids
-            .difference(&existing_library_ids)
-            .cloned()
-            .collect();
-
-        if !missing_song_ids.is_empty() {
-            self.pending_youtube_imports = missing_song_ids.len();
-            self.pending_playlist_import = pending_playlists;
-            status_info!(
-                "Importing {} playlists. Fetching info for {} new songs...",
-                self.pending_playlist_import.len(),
-                self.pending_youtube_imports
-            );
-            for song_id in missing_song_ids {
-                ctx.work_sender.send(WorkRequest::YouTubeGetSongInfo { id: song_id })?;
-            }
-        } else {
-            self.pending_playlist_import = pending_playlists;
-            self.on_finalize_playlist_import(ctx)?;
-        }
-
-        Ok(())
-    }
-
-    fn on_finalize_playlist_import(&mut self, ctx: &mut Ctx) -> Result<()> {
-        let pending = std::mem::take(&mut self.pending_playlist_import);
-        let playlist_count = pending.len();
-        for playlist_to_import in pending {
-            let playlist_id = match ctx.data_store.create_playlist(&playlist_to_import.name) {
-                Ok(id) => id,
-                Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
-                    status_warn!("Playlist '{}' already exists, skipping.", playlist_to_import.name);
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
-            };
-
-            for song_id in playlist_to_import.song_ids {
-                ctx.data_store
-                    .add_youtube_song_to_playlist(playlist_id, &song_id)?;
-            }
-        }
-
-        status_info!("Successfully imported {} playlists.", playlist_count);
-        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
-        Ok(())
-    }
-
-    fn on_save_command(&mut self, name: &str, ctx: &mut Ctx) -> Result<()> {
-        let items: Vec<PlaylistItem> = ctx
-            .queue
-            .iter()
-            .map(|song| PlaylistItem::Local(song.file.clone()))
-            .collect();
-
-        if items.is_empty() {
-            status_info!("Queue is empty, nothing to save.");
-            return Ok(());
-        }
-
-        let playlist_id = match ctx.data_store.create_playlist(name) {
-            Ok(id) => id,
-            Err(crate::core::data_store::DataStoreError::PlaylistNameTaken(_)) => {
-                let existing = ctx
-                    .data_store
-                    .get_all_playlists()?
-                    .into_iter()
-                    .find(|p| p.name == name)
-                    .context("Failed to find playlist that should exist")?;
-                ctx.data_store.delete_playlist(existing.id)?;
-                ctx.data_store.create_playlist(name)?
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        for item in items.iter() {
-            if let PlaylistItem::Local(path) = item {
-                ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
-            }
-        }
-
-        status_info!("Saved {} items to playlist '{}'", items.len(), name);
-        ctx.app_event_sender
-            .send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
-        Ok(())
-    }
-
-    fn on_load_command(&mut self, name: &str, ctx: &mut Ctx) -> Result<()> {
-        let all_playlists = ctx.data_store.get_all_playlists()?;
-        let items = match all_playlists.into_iter().find(|p| p.name == name) {
-            Some(p) => p.items,
-            None => {
-                status_error!("Failed to load playlist '{}': not found.", name);
-                return Ok(());
-            }
-        };
-
-        let library_songs = self.get_youtube_master_library(ctx)?;
-
-        status_info!("Loading {} items from playlist '{}'...", items.len(), name);
-        for item in items {
-            match item {
-                PlaylistItem::Local(path) => {
-                    ctx.command(move |client| {
-                        client.add(&path, None)?;
-                        Ok(())
-                    });
-                }
-                PlaylistItem::YouTube(song) => {
-                    let id = song.youtube_id;
-                    if let Some(song) = library_songs.get(&id) {
-                        ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                            song: song.clone(),
-                            context: None,
-                        })?;
-                    } else {
-                        status_warn!("Could not find YouTube song with ID {} in library, skipping.", id);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn on_ui_app_event(&mut self, event: UiAppEvent, ctx: &mut Ctx) -> Result<()> {
+impl UiEventHandler {
+    fn handle(&self, event: UiAppEvent, ui: &mut Ui, ctx: &mut Ctx) -> Result<()> {
         match event {
             UiAppEvent::Modal(modal) => {
                 let existing_modal = modal.replacement_id().and_then(|id| {
-                    self.modals
+                    ui.modals
                         .iter_mut()
                         .find(|m| m.replacement_id().as_ref().is_some_and(|m_id| *m_id == id))
                 });
@@ -1082,297 +1310,158 @@ impl<'ui> Ui<'ui> {
                 if let Some(existing_modal) = existing_modal {
                     *existing_modal = modal;
                 } else {
-                    self.modals.push(modal);
+                    ui.modals.push(modal);
                 }
-
-                self.on_event(UiEvent::ModalOpened, ctx)?;
+                ui.on_event(UiEvent::ModalOpened, ctx)?;
                 ctx.render()?;
             }
-            UiAppEvent::PopConfigErrorModal => {
-                let original_len = self.modals.len();
-                self.modals
-                    .retain(|m| m.replacement_id().is_none_or(|id| id != ERROR_CONFIG_MODAL_ID));
-                let new_len = self.modals.len();
+            UiAppEvent::PopModal(id) => {
+                let original_len = ui.modals.len();
+                ui.modals.retain(|m| m.id() != id);
+                let new_len = ui.modals.len();
                 if new_len == 0 {
-                    self.on_event(UiEvent::ModalClosed, ctx)?;
+                    ui.on_event(UiEvent::ModalClosed, ctx)?;
                 }
                 if original_len != new_len {
                     ctx.render()?;
                 }
             }
-            UiAppEvent::PopModal(id) => {
-                let original_len = self.modals.len();
-                self.modals.retain(|m| m.id() != id);
-                let new_len = self.modals.len();
+            UiAppEvent::PopConfigErrorModal => {
+                let original_len = ui.modals.len();
+                ui.modals
+                    .retain(|m| m.replacement_id().is_none_or(|id| id != ERROR_CONFIG_MODAL_ID));
+                let new_len = ui.modals.len();
                 if new_len == 0 {
-                    self.on_event(UiEvent::ModalClosed, ctx)?;
+                    ui.on_event(UiEvent::ModalClosed, ctx)?;
                 }
                 if original_len != new_len {
                     ctx.render()?;
                 }
             }
             UiAppEvent::ChangeTab(tab_name) => {
-                self.change_tab(tab_name, ctx)?;
+                ui.change_tab(tab_name, ctx)?;
                 ctx.render()?;
             }
+            UiAppEvent::PromptToRemoveSong(song) => {
+                let modal = menu::modal::MenuModal::new(ctx)
+                    .list_section(ctx, |section| {
+                        Some(
+                            section
+                                .item("Remove from library?", |_| Ok(()))
+                                .item("Yes", move |ctx| {
+                                    ctx.app_event_sender.send(AppEvent::UiEvent(
+                                        UiAppEvent::YouTubeLibraryRemoveSong(song.youtube_id),
+                                    ))?;
+                                    Ok(())
+                                })
+                                .item("No", |_| Ok(())),
+                        )
+                    })
+                    .build();
+                ui.on_ui_app_event(UiAppEvent::Modal(Box::new(modal)), ctx)?;
+            }
+            UiAppEvent::QueueYouTubeSong(song) => {
+                ui.on_queue_youtube_song(song, ctx)?;
+            }
+            UiAppEvent::YouTubeLibraryAddSongs(songs) => {
+                self.on_add_songs_to_library(ui, songs, ctx)?;
+            }
+            UiAppEvent::AddPlaylistItemsToQueue(items) => {
+                ui.add_playlist_items_to_queue(items, false, ctx)?;
+            }
             UiAppEvent::YouTubeLibraryRemoveSong(song_id) => {
-                self.on_youtube_library_remove_song(&song_id, ctx)?;
+                self.on_youtube_library_remove_song(ui, &song_id, ctx)?;
             }
             UiAppEvent::ExecuteCommand(cmd_str) => {
-                self.handle_command(cmd_str, ctx)?;
+                ui.handle_command(cmd_str, ctx)?;
             }
             UiAppEvent::RefreshRmpcPlaylists => {
-                if let Panes::RmpcPlaylists(p) = self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
+                if let Panes::RmpcPlaylists(p) = ui.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
                     p.refresh_playlists(ctx)?;
                 }
                 ctx.render()?;
             }
-            UiAppEvent::AddPlaylistItemsToQueue(items) => {
-                self.add_playlist_items_to_queue(items, false, ctx)?;
-            }
             UiAppEvent::ReplaceQueueWithPlaylistItems(items) => {
-                self.add_playlist_items_to_queue(items, true, ctx)?;
+                ui.add_playlist_items_to_queue(items, true, ctx)?;
             }
             UiAppEvent::AddItemsToPlaylist { name, items } => {
-                self.on_add_items_to_playlist(&name, items, ctx)?;
+                ui.on_add_items_to_playlist(&name, items, ctx)?;
             }
             UiAppEvent::CreatePlaylistFromItems { name, items } => {
-                self.on_create_playlist_from_items(&name, items, ctx)?;
+                ui.on_create_playlist_from_items(&name, items, ctx)?;
+            }
+            UiAppEvent::CreatePlaylist(name) => {
+                ui.on_create_playlist(&name, ctx)?;
+            }
+            UiAppEvent::RenamePlaylist { id, old_name, new_name } => {
+                ui.on_rename_playlist(id, &old_name, &new_name, ctx)?;
+            }
+            UiAppEvent::DeletePlaylist(id) => {
+                ui.on_delete_playlist(id, ctx)?;
             }
             UiAppEvent::ImportYouTubeLibrary { path } => {
-                self.on_import_youtube_library(path, ctx)?;
+                ui.on_import_youtube_library(path, ctx)?;
             }
             UiAppEvent::ImportYouTubePlaylists { path } => {
-                self.on_import_youtube_playlists(path, ctx)?;
+                ui.on_import_youtube_playlists(path, ctx)?;
             }
             UiAppEvent::FinalizePlaylistImport => {
-                self.on_finalize_playlist_import(ctx)?;
+                ui.on_finalize_playlist_import(ctx)?;
             }
             UiAppEvent::ClearStatusMessage => {
                 ctx.messages.clear();
             }
+            _ => { /* ... other events ... */ }
         }
         Ok(())
     }
-
-    pub fn handle_command(&mut self, cmd_str: String, ctx: &mut Ctx) -> Result<()> {
-        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
-        match parts.as_slice() {
-            ["save", name] => {
-                self.on_save_command(name, ctx)?;
-            }
-            ["load", name] => {
-                self.on_load_command(name, ctx)?;
-            }
-            ["importlibrary", path] => {
-                ctx.app_event_sender
-                    .send(AppEvent::UiEvent(UiAppEvent::ImportYouTubeLibrary {
-                        path: PathBuf::from(path),
-                    }))?;
-            }
-            ["importplaylists", path] => {
-                ctx.app_event_sender
-                    .send(AppEvent::UiEvent(UiAppEvent::ImportYouTubePlaylists {
-                        path: PathBuf::from(path),
-                    }))?;
-            }
-            _ => {
-                // Fallback to original behavior
-                if let Ok(Args { command: Some(cmd), .. }) = cmd_str.parse() {
-                    if ctx.work_sender.send(WorkRequest::Command(cmd)).is_err() {
-                        log::error!("Failed to send command");
-                    }
+    
+    fn on_add_songs_to_library(&self, ui: &mut Ui, songs: Vec<YouTubeSong>, ctx: &mut Ctx) -> Result<()> {
+        let mut new_song_count = 0;
+        let mut already_present_count = 0;
+        
+        // The YouTube pane holds the controller, which is the source of truth for UI state.
+        if let Panes::YouTube(pane) = ui.panes.get_mut(&PaneType::YouTube, ctx)? {
+            for song in songs {
+                // 1. Persist to the database first.
+                if ctx.data_store.add_song_to_library(&song)? {
+                    // 2. If successful, update the controller's state.
+                    pane.add_song_to_library(song);
+                    new_song_count += 1;
                 } else {
-                    status_error!("Unknown command or invalid arguments: {}", cmd_str);
+                    already_present_count += 1;
                 }
             }
         }
+
+        if new_song_count > 0 {
+            status_info!("Added {} new song(s) to the library.", new_song_count);
+        }
+        if already_present_count > 0 {
+            status_info!("{} selected song(s) were already in the library.", already_present_count);
+        }
+        
         Ok(ctx.render()?)
     }
-
-    pub fn resize(&mut self, area: Rect, ctx: &Ctx) -> Result<()> {
-        log::trace!(area:?; "Terminal was resized");
-        self.calc_areas(area, ctx);
-
-        self.layout.for_each_pane(self.area, &mut |pane, pane_area, _, _| {
-            match self.panes.get_mut(&pane.pane, ctx)? {
-                Panes::TabContent => {
-                    active_tab_call!(self, ctx, resize(pane_area, ctx))?;
-                }
-                mut pane_instance => {
-                    pane_call!(pane_instance, calculate_areas(pane_area, ctx))?;
-                    pane_call!(pane_instance, resize(pane_area, ctx))?;
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn on_event(&mut self, mut event: UiEvent, ctx: &mut Ctx) -> Result<()> {
-        match event {
-            UiEvent::Exit => {}
-            UiEvent::Database => {
-                status_warn!(
-                    "The music database has been updated. Some parts of the UI may have been reinitialized to prevent inconsistent behaviours."
-                );
-            }
-            UiEvent::ConfigChanged => {
-                // Call on_hide for all panes in the current tab and current layout because they
-                // might not be visible after the change
-                self.layout.for_each_pane(self.area, &mut |pane, _, _, _| {
-                    match self.panes.get_mut(&pane.pane, ctx)? {
-                        Panes::TabContent => {
-                            active_tab_call!(self, ctx, on_hide(ctx))?;
-                        }
-                        mut pane_instance => {
-                            pane_call!(pane_instance, on_hide(ctx))?;
-                        }
-                    }
-                    Ok(())
-                })?;
-
-                self.layout = ctx.config.theme.layout.clone();
-                let new_active_tab = ctx
-                    .config
-                    .tabs
-                    .names
-                    .iter()
-                    .find(|tab| tab == &&ctx.active_tab)
-                    .or(ctx.config.tabs.names.first())
-                    .context("Expected at least one tab")?;
-
-                let mut old_other_panes = std::mem::take(&mut self.panes.others);
-                for (key, new_other_pane) in PaneContainer::init_other_panes(ctx) {
-                    let old = old_other_panes.remove(&key);
-                    self.panes.others.insert(key, old.unwrap_or(new_other_pane));
-                }
-                // We have to be careful about the order of operations here as they might cause
-                // a panic if done incorrectly
-                self.tabs = Self::init_tabs(ctx)?;
-                ctx.active_tab = new_active_tab.clone();
-                self.on_event(UiEvent::TabChanged(new_active_tab.clone()), ctx)?;
-
-                // Call before_show here, because we have "hidden" all the panes before and this
-                // will force them to reinitialize
-                self.before_show(self.area, ctx)?;
-            }
-            _ => {}
+    
+    fn on_youtube_library_remove_song(&self, ui: &mut Ui, song_id: &str, ctx: &mut Ctx) -> Result<()> {
+        // 1. Persist the change in the database.
+        if !ctx.data_store.remove_song_from_library(song_id)? {
+            status_warn!("Song was not in the library.");
+            return Ok(ctx.render()?);
         }
 
-        for pane_type in &ctx.config.active_panes {
-            let visible = self
-                .tabs
-                .get(&ctx.active_tab)
-                .is_some_and(|tab| tab.panes.panes_iter().any(|pane| pane.pane == *pane_type))
-                || self.layout.panes_iter().any(|pane| pane.pane == *pane_type);
-
-            match self.panes.get_mut(pane_type, ctx)? {
-                #[cfg(debug_assertions)]
-                Panes::Logs(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Queue(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Directories(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Albums(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Artists(p) => p.on_event(&mut event, visible, ctx),
-                Panes::RmpcPlaylists(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Search(p) => p.on_event(&mut event, visible, ctx),
-                Panes::YouTube(p) => p.on_event(&mut event, visible, ctx),
-                Panes::AlbumArtists(p) => p.on_event(&mut event, visible, ctx),
-                Panes::AlbumArt(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Lyrics(p) => p.on_event(&mut event, visible, ctx),
-                Panes::ProgressBar(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Header(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Tabs(p) => p.on_event(&mut event, visible, ctx),
-                #[cfg(debug_assertions)]
-                Panes::FrameCount(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Others(p) => p.on_event(&mut event, visible, ctx),
-                Panes::Cava(p) => p.on_event(&mut event, visible, ctx),
-                // Property and the dummy TabContent pane do not need to receive events
-                Panes::Property(_) | Panes::TabContent => Ok(()),
-            }?;
+        // 2. Update the single source of truth for the UI state (the controller).
+        if let Panes::YouTube(pane) = ui.panes.get_mut(&PaneType::YouTube, ctx)? {
+            pane.remove_song_from_library(song_id);
+        }
+        
+        if let Panes::RmpcPlaylists(p) = ui.panes.get_mut(&PaneType::RmpcPlaylists, ctx)? {
+            p.refresh_playlists(ctx)?;
         }
 
-        for modal in &mut self.modals {
-            modal.on_event(&mut event, ctx)?;
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn on_command_finished(
-        &mut self,
-        id: &'static str,
-        pane: Option<PaneType>,
-        data: MpdQueryResult,
-        ctx: &mut Ctx,
-    ) -> Result<()> {
-        match pane {
-            Some(pane_type) => {
-                let visible =
-                    self.tabs.get(&ctx.active_tab).is_some_and(|tab| {
-                        tab.panes.panes_iter().any(|pane| pane.pane == pane_type)
-                    }) || self.layout.panes_iter().any(|pane| pane.pane == pane_type);
-
-                match self.panes.get_mut(&pane_type, ctx)? {
-                    #[cfg(debug_assertions)]
-                    Panes::Logs(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Queue(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Directories(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Albums(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Artists(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::RmpcPlaylists(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Search(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::YouTube(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::AlbumArtists(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::AlbumArt(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Lyrics(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::ProgressBar(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Header(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Tabs(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Others(p) => p.on_query_finished(id, data, visible, ctx),
-                    #[cfg(debug_assertions)]
-                    Panes::FrameCount(p) => p.on_query_finished(id, data, visible, ctx),
-                    Panes::Cava(p) => p.on_query_finished(id, data, visible, ctx),
-                    // Property and the dummy TabContent pane do not need to receive command
-                    // notifications
-                    Panes::Property(_) | Panes::TabContent => Ok(()),
-                }?;
-            }
-            None => match (id, data) {
-                (OPEN_OUTPUTS_MODAL, MpdQueryResult::Outputs(outputs)) => {
-                    modal!(ctx, OutputsModal::new(outputs));
-                }
-                (OPEN_DECODERS_MODAL, MpdQueryResult::Decoders(decoders)) => {
-                    modal!(ctx, DecodersModal::new(decoders));
-                }
-                (
-                    "add_youtube_song" | "refresh_youtube_song",
-                    MpdQueryResult::YouTubeSongAdded { song_id, song },
-                ) => {
-                    ctx.data_store
-                        .add_youtube_song_to_queue(song_id, &song.youtube_id)?;
-                    ctx.data_store.add_song_to_library(&song)?;
-                    ctx.youtube_library
-                        .insert(song.youtube_id.clone(), song.clone());
-                    ctx.queue_youtube_ids.insert(song_id, song.youtube_id.clone());
-                    if let Panes::YouTube(p) = self.panes.get_mut(&PaneType::YouTube, ctx)? {
-                        p.add_song(song.clone());
-                    }
-                    if let Panes::RmpcPlaylists(p) =
-                        self.panes.get_mut(&PaneType::RmpcPlaylists, ctx)?
-                    {
-                        p.add_song(&song);
-                    }
-                }
-                (id, mut data) => {
-                    // TODO a proper modal target
-                    for modal in &mut self.modals {
-                        modal.on_query_finished(id, &mut data, ctx)?;
-                    }
-                }
-            },
-        }
-
-        Ok(())
+        status_info!("Removed song from library.");
+        Ok(ctx.render()?)
     }
 }
 
@@ -1385,6 +1474,9 @@ pub enum UiAppEvent {
     YouTubeLibraryRemoveSong(String),
     ExecuteCommand(String),
     RefreshRmpcPlaylists,
+    PromptToRemoveSong(YouTubeSong),
+    QueueYouTubeSong(YouTubeSong),
+    YouTubeLibraryAddSongs(Vec<YouTubeSong>),
     AddPlaylistItemsToQueue(Vec<PlaylistItem>),
     ReplaceQueueWithPlaylistItems(Vec<PlaylistItem>),
     AddItemsToPlaylist {
@@ -1395,6 +1487,13 @@ pub enum UiAppEvent {
         name: String,
         items: Vec<PlaylistItem>,
     },
+    CreatePlaylist(String),
+    RenamePlaylist {
+        id: i64,
+        old_name: String,
+        new_name: String,
+    },
+    DeletePlaylist(i64),
     ImportYouTubeLibrary {
         path: PathBuf,
     },
@@ -1440,8 +1539,13 @@ impl TryFrom<IdleEvent> for UiEvent {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum KeyHandleResult {
-    None,
+    /// The key was handled and the event should not be propagated further.
+    Handled,
+    /// The key was not relevant to this component.
+    Ignored,
+    /// The application should quit.
     Quit,
 }
 
@@ -1589,4 +1693,3 @@ impl Config {
         )
     }
 }
-
