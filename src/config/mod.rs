@@ -37,6 +37,63 @@ pub mod theme;
 pub use address::MpdAddress;
 pub use search::Search;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YouTubeServiceConfigFile {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub ytdlp_path: Option<String>,
+    #[serde(default)]
+    pub ytdlp_extra_args: Vec<String>,
+    #[serde(default = "defaults::u64::<30000>")]
+    pub operation_timeout_ms: u64,
+    #[serde(default = "defaults::u32::<10>")]
+    pub requests_per_minute: u32,
+    #[serde(default = "defaults::u32::<100>")]
+    pub requests_per_hour: u32,
+    #[serde(default = "defaults::bool::<true>")]
+    pub cache_enabled: bool,
+}
+
+impl Default for YouTubeServiceConfigFile {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ytdlp_path: None,
+            ytdlp_extra_args: Vec::new(),
+            operation_timeout_ms: 30000,
+            requests_per_minute: 10,
+            requests_per_hour: 100,
+            cache_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct YouTubeServiceConfig {
+    pub enabled: bool,
+    pub ytdlp_path: Option<PathBuf>,
+    pub ytdlp_extra_args: Vec<String>,
+    pub operation_timeout: Duration,
+    pub requests_per_minute: u32,
+    pub requests_per_hour: u32,
+    pub cache_enabled: bool,
+}
+
+impl From<YouTubeServiceConfigFile> for YouTubeServiceConfig {
+    fn from(file: YouTubeServiceConfigFile) -> Self {
+        Self {
+            enabled: file.enabled,
+            ytdlp_path: file.ytdlp_path.map(|p| tilde_expand(&p).into_owned().into()),
+            ytdlp_extra_args: file.ytdlp_extra_args,
+            operation_timeout: Duration::from_millis(file.operation_timeout_ms),
+            requests_per_minute: file.requests_per_minute,
+            requests_per_hour: file.requests_per_hour,
+            cache_enabled: file.cache_enabled,
+        }
+    }
+}
+
 use self::{
     keys::{KeyConfig, KeyConfigFile},
     theme::{ConfigColor, UiConfig, UiConfigFile},
@@ -88,6 +145,7 @@ pub struct Config {
     pub directories_sort: Arc<SortOptions>,
     pub cava: Cava,
     pub youtube_cache_ttl: Duration,
+    pub youtube_service: YouTubeServiceConfig,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -171,6 +229,8 @@ pub struct ConfigFile {
     pub cava: CavaFile,
     #[serde(default = "defaults::u64::<3600>")]
     pub youtube_cache_ttl_sec: u64,
+    #[serde(default)]
+    pub youtube_service: YouTubeServiceConfigFile,
 }
 
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq, Eq)]
@@ -232,6 +292,7 @@ impl Default for ConfigFile {
             cava: CavaFile::default(),
             show_playlists_in_browser: ShowPlaylistsMode::default(),
             youtube_cache_ttl_sec: 3600,
+            youtube_service: YouTubeServiceConfigFile::default(),
         }
     }
 }
@@ -446,6 +507,7 @@ impl ConfigFile {
             reflect_changes_to_playlist: self.reflect_changes_to_playlist,
             cava: self.cava.into(),
             youtube_cache_ttl: Duration::from_secs(self.youtube_cache_ttl_sec),
+            youtube_service: self.youtube_service.into(),
         };
 
         if skip_album_art_check {

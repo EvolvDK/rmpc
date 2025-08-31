@@ -5,6 +5,20 @@ use crate::youtube::{
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use itertools::Itertools;
 
+struct DebugSkimMatcher(SkimMatcherV2);
+
+impl std::fmt::Debug for DebugSkimMatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkimMatcherV2").finish_non_exhaustive()
+    }
+}
+
+impl Default for DebugSkimMatcher {
+    fn default() -> Self {
+        Self(SkimMatcherV2::default())
+    }
+}
+
 /// Defines the available search filtering modes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum SearchMode {
@@ -57,7 +71,7 @@ pub struct YouTubeSearchController {
     filtered_results: Vec<FilteredSearchResult>,
     current_query: String,
     is_loading: bool,
-    matcher: SkimMatcherV2,
+    matcher: DebugSkimMatcher,
     pub regex_error: Option<String>,
 }
 
@@ -161,7 +175,7 @@ impl YouTubeSearchController {
     
     fn apply_fuzzy_filter(&mut self) {
         self.filtered_results = self.raw_results.iter().filter_map(|song| {
-            self.matcher.fuzzy_indices(&song.title, &self.current_query)
+            self.matcher.0.fuzzy_indices(&song.title, &self.current_query)
                 .map(|(score, indices)| FilteredSearchResult {
                     score, song: song.clone(), highlighted_indices: indices,
                 })

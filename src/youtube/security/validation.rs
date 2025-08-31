@@ -32,7 +32,7 @@ static DANGEROUS_REGEX_PATTERNS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     .collect()
 });
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum ValidationError {
     #[error("Query is empty or contains only whitespace")]
     EmptyQuery,
