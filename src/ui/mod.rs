@@ -92,8 +92,6 @@ pub struct Ui<'ui> {
     area: Rect,
     pending_youtube_imports: usize,
     pending_playlist_import: Vec<PendingPlaylistImport>,
-    action_handler: GlobalActionHandler,
-    event_handler: UiEventHandler,
 }
 
 const OPEN_DECODERS_MODAL: &str = "open_decoders_modal";
@@ -126,8 +124,6 @@ impl<'ui> Ui<'ui> {
             tabs: Self::init_tabs(ctx)?,
             pending_youtube_imports: 0,
             pending_playlist_import: Vec::new(),
-            action_handler: GlobalActionHandler::default(),
-            event_handler: UiEventHandler::default(),
         })
     }
 
@@ -239,7 +235,7 @@ impl<'ui> Ui<'ui> {
         active_tab_call!(self, ctx, handle_action(key, ctx))?;
 
         if let Some(action) = key.as_global_action(ctx) {
-            return self.action_handler.handle(action.clone(), self, ctx);
+            return GlobalActionHandler::handle(action.clone(), self, ctx);
         }
 
         Ok(KeyHandleResult::Ignored)
@@ -381,7 +377,7 @@ impl<'ui> Ui<'ui> {
  
         status_info!("Fetching stream URL for '{}'...", song.title);
         let request = WorkRequest::GetYouTubeStreamUrl {
-            song,
+            song: crate::shared::events::IdentifiedYouTubeSong::Full(song),
             context: None,
         };
         ctx.work_sender.send(request)?;
@@ -568,7 +564,7 @@ impl<'ui> Ui<'ui> {
             let record: TakeoutSong = result?;
             if !all_song_ids.contains(&record.song_id) {
                 ctx.work_sender
-                    .send(WorkRequest::YouTubeGetSongInfo { id: record.song_id })?;
+                    .send(WorkRequest::YouTubeGetSongInfo { id: record.song_id, context: None })?;
                 count += 1;
             }
         }
@@ -629,7 +625,7 @@ impl<'ui> Ui<'ui> {
                 self.pending_youtube_imports
             );
             for song_id in missing_song_ids {
-                ctx.work_sender.send(WorkRequest::YouTubeGetSongInfo { id: song_id })?;
+                ctx.work_sender.send(WorkRequest::YouTubeGetSongInfo { id: song_id, context: None })?;
             }
         } else {
             self.pending_playlist_import = pending_playlists;
@@ -746,7 +742,7 @@ impl<'ui> Ui<'ui> {
                     let id = song.youtube_id;
                     if let Some(song) = library_songs.get(&id) {
                         ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                            song: song.clone(),
+                            song: crate::shared::events::IdentifiedYouTubeSong::Full(song.clone()),
                             context: None,
                         })?;
                     } else {
@@ -759,7 +755,7 @@ impl<'ui> Ui<'ui> {
     }
 
     pub fn on_ui_app_event(&mut self, event: UiAppEvent, ctx: &mut Ctx) -> Result<()> {
-        self.event_handler.handle(event, self, ctx)
+        UiEventHandler::handle(event, self, ctx)
     }
 
     pub fn handle_command(&mut self, cmd_str: String, ctx: &mut Ctx) -> Result<()> {
@@ -979,7 +975,7 @@ impl<'ui> Ui<'ui> {
 }
 
 impl GlobalActionHandler {
-    fn handle(&self, action: GlobalAction, ui: &mut Ui, ctx: &mut Ctx) -> Result<KeyHandleResult> {
+    fn handle(action: GlobalAction, ui: &mut Ui, ctx: &mut Ctx) -> Result<KeyHandleResult> {
         match action {
             GlobalAction::Quit => return Ok(KeyHandleResult::Quit),
             GlobalAction::NextTab => {
@@ -1291,14 +1287,14 @@ impl GlobalActionHandler {
                 GlobalAction::AddRandom => {
                     modal!(ctx, AddRandomModal::new(ctx));
                 }
-            _ => { /* ... other actions ... */ }
+            _ => {}
         }
         Ok(KeyHandleResult::Handled)
     }
 }
 
 impl UiEventHandler {
-    fn handle(&self, event: UiAppEvent, ui: &mut Ui, ctx: &mut Ctx) -> Result<()> {
+    fn handle(event: UiAppEvent, ui: &mut Ui, ctx: &mut Ctx) -> Result<()> {
         match event {
             UiAppEvent::Modal(modal) => {
                 let existing_modal = modal.replacement_id().and_then(|id| {
@@ -1411,34 +1407,31 @@ impl UiEventHandler {
             UiAppEvent::ClearStatusMessage => {
                 ctx.messages.clear();
             }
-            _ => { /* ... other events ... */ }
         }
         Ok(())
     }
     
     fn on_add_songs_to_library(&self, ui: &mut Ui, songs: Vec<YouTubeSong>, ctx: &mut Ctx) -> Result<()> {
         let mut new_song_count = 0;
-        let mut already_present_count = 0;
         
         // The YouTube pane holds the controller, which is the source of truth for UI state.
         if let Panes::YouTube(pane) = ui.panes.get_mut(&PaneType::YouTube, ctx)? {
             for song in songs {
                 // 1. Persist to the database first.
-                if ctx.data_store.add_song_to_library(&song)? {
-                    // 2. If successful, update the controller's state.
-                    pane.add_song_to_library(song);
-                    new_song_count += 1;
-                } else {
-                    already_present_count += 1;
+                // Assuming DataStore now returns Result<()> and handles duplicates internally or via error.
+                if let Err(e) = ctx.data_store.add_song_to_library(&song) {
+                    status_error!("Failed to add song to library: {}", e);
+                    continue; // Skip to next song on failure
                 }
+                
+                // 2. If successful, update the controller's state.
+                pane.add_song_to_library(song);
+                new_song_count += 1;
             }
         }
 
         if new_song_count > 0 {
             status_info!("Added {} new song(s) to the library.", new_song_count);
-        }
-        if already_present_count > 0 {
-            status_info!("{} selected song(s) were already in the library.", already_present_count);
         }
         
         Ok(ctx.render()?)
@@ -1446,10 +1439,7 @@ impl UiEventHandler {
     
     fn on_youtube_library_remove_song(&self, ui: &mut Ui, song_id: &str, ctx: &mut Ctx) -> Result<()> {
         // 1. Persist the change in the database.
-        if !ctx.data_store.remove_song_from_library(song_id)? {
-            status_warn!("Song was not in the library.");
-            return Ok(ctx.render()?);
-        }
+        ctx.data_store.remove_song_from_library(song_id)?;
 
         // 2. Update the single source of truth for the UI state (the controller).
         if let Panes::YouTube(pane) = ui.panes.get_mut(&PaneType::YouTube, ctx)? {

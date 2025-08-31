@@ -101,7 +101,7 @@ impl SearchComponent {
                 let generation = self.controller.start_new_search(query.clone());
                 status_info!("Searching YouTube for: '{}'", &query);
                 let request = WorkRequest::YouTubeSearch { query, generation };
-                ctx.app_event_sender.send(AppEvent::WorkRequest(request))?;
+                ctx.work_sender.send(request)?;
                 Ok(ActionOutcome::Handled)
             }
             KeyCode::Down | KeyCode::Tab => {
@@ -228,7 +228,7 @@ impl Component for SearchComponent {
             .map(|r| {
                 let highlight = ctx.config.theme.highlighted_item_style.bold();
                 let indices: HashSet<usize> = r.highlighted_indices.iter().cloned().collect();
-                let title_spans: Vec<Span> = r
+                let mut spans: Vec<Span> = r
                     .song
                     .title
                     .chars()
@@ -244,10 +244,8 @@ impl Component for SearchComponent {
                         )
                     })
                     .collect();
-                ListItem::new(Line::from(vec![
-                    Line::from(title_spans).into(),
-                    Span::raw(format!(" - {}", r.song.artist)),
-                ]))
+                spans.push(Span::raw(format!(" - {}", r.song.artist)));
+                ListItem::new(Line::from(spans))
             })
             .collect();
         let list = List::new(items)
