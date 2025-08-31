@@ -368,6 +368,54 @@ impl DataStore {
             Ok(None)
         }
     }
+
+    /// Retrieves all items for a single playlist.
+    fn get_playlist_items(&self, playlist_id: i64) -> Result<Vec<models::PlaylistItem>, DataStoreError> {
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("
+            SELECT
+                pi.file_path,
+                s.youtube_id,
+                s.title,
+                s.artist,
+                s.album,
+                s.duration_secs,
+                s.thumbnail_url
+            FROM playlist_items pi
+            LEFT JOIN songs s ON pi.song_youtube_id = s.youtube_id
+            WHERE pi.playlist_id = ?1
+            ORDER BY pi.position
+        ")?;
+
+        let rows = stmt.query_map([playlist_id], |row| {
+            let file_path: Option<String> = row.get(0)?;
+            let youtube_id: Option<String> = row.get(1)?;
+
+            if let Some(path) = file_path {
+                Ok(Some(models::PlaylistItem::Local(path)))
+            } else if let Some(yt_id) = youtube_id {
+                Ok(Some(models::PlaylistItem::YouTube(models::YouTubeSong {
+                    youtube_id: yt_id,
+                    title: row.get(2)?,
+                    artist: row.get(3)?,
+                    album: row.get(4)?,
+                    duration_secs: row.get(5)?,
+                    thumbnail_url: row.get(6)?,
+                })))
+            } else {
+                Ok(None)
+            }
+        })?;
+        
+        let mut items = Vec::new();
+        for row in rows {
+            if let Some(item) = row? {
+                items.push(item);
+            }
+        }
+
+        Ok(items)
+    }
     
     /// Retrieves only the names of all playlists.
     pub fn get_playlist_names(&self) -> Result<Vec<String>, DataStoreError> {
