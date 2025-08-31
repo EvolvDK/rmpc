@@ -296,8 +296,8 @@ impl YouTubeLibraryController {
     
     /// Toggle song selection
     pub fn toggle_song_selection(&mut self, song_index: usize) {
-        if let Some(artist) = self.selected_artist() {
-            self.selection_state.toggle_song(artist, song_index);
+        if let Some(artist) = self.selected_artist().map(|s| s.to_owned()) {
+            self.selection_state.toggle_song(&artist, song_index);
         }
     }
     
@@ -308,8 +308,8 @@ impl YouTubeLibraryController {
     
     /// Clear song selections for current artist
     pub fn clear_current_artist_selections(&mut self) {
-        if let Some(artist) = self.selected_artist() {
-            self.selection_state.clear_artist_songs(artist);
+        if let Some(artist) = self.selected_artist().map(|s| s.to_owned()) {
+            self.selection_state.clear_artist_songs(&artist);
         }
     }
     

@@ -370,14 +370,14 @@ impl Pane for RmpcPlaylistsPane {
                 self.focus = Focus::Content;
                 let clicked_row = pos.y.saturating_sub(self.content_list_area.y + 1) as usize;
                 let selected_index = self.content_list_state.offset() + clicked_row;
-                if let Some(playlist) = self.get_selected_playlist() {
+                if let Some(playlist) = self.get_selected_playlist().cloned() {
                     if selected_index < playlist.items.len() {
                         self.content_list_state.select(Some(selected_index));
                         self.prepare_preview(ctx)?;
                     }
                     let items = self.get_selected_content_items();
                     if !items.is_empty() {
-                        self.build_content_context_menu(items, playlist, ctx)?;
+                        self.build_content_context_menu(items, &playlist, ctx)?;
                     }
                 }
             }
