@@ -189,7 +189,7 @@ pub fn playlist_editing_actions(
                 .item("Rename", move |ctx| {
                     let title = format!("Rename '{}'", p_clone.name);
                     let modal = InputModal::new(ctx)
-						.title(&title)
+						.title(title)
                         .initial_value(p_clone.name.clone())
                         .on_confirm(move |ctx, new_name| {
                             ctx.app_event_sender.send(AppEvent::UiEvent(
@@ -220,7 +220,7 @@ pub fn create_playlist_modal(ctx: &Ctx) -> Box<dyn Modal + Send + Sync> {
         .on_confirm(|ctx, name| {
             if !name.is_empty() {
                 ctx.app_event_sender
-                    .send(AppEvent::UiEvent(UiAppEvent::CreatePlaylist(name)))?;
+                    .send(AppEvent::UiEvent(UiAppEvent::CreatePlaylist(name.to_string())))?;
             }
             Ok(())
         });

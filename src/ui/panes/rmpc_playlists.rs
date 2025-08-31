@@ -1,9 +1,10 @@
-use std::collections::{BTreeSet};
+use std::{collections::{BTreeSet}, time::Duration};
 
 use anyhow::Result;
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
+    text::{Line, Span},
     style::Stylize,
     widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
@@ -15,6 +16,7 @@ use crate::{
     mpd::mpd_client::{Filter, MpdClient, Tag},
     shared::{
         events::AppEvent,
+        ext::duration::DurationExt,
         key_event::KeyEvent,
         mouse_event::{MouseEvent, MouseEventKind},
         mpd_query::PreviewGroup,
@@ -80,7 +82,33 @@ impl RmpcPlaylistsPane {
         match item {
             PlaylistItem::YouTube(song) => {
                 if let Some(song_info) = ctx.youtube_library.get(&song.youtube_id) {
-                    self.preview_data = Some(song_info.to_song_for_preview().to_preview(key_style, group_style));
+                    let mut group = PreviewGroup::from(
+                        None,
+                        Some(group_style),
+                        vec![
+                            Line::from(vec![
+                                Span::styled("Title: ", key_style),
+                                Span::raw(song_info.title.clone()),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("Artist: ", key_style),
+                                Span::raw(song_info.artist.clone()),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("Duration: ", key_style),
+                                Span::raw(
+                                    Duration::from_secs(song_info.duration_secs as u64).to_string(),
+                                ),
+                            ]),
+                        ],
+                    );
+                    if let Some(album) = &song_info.album {
+                        group.push(Line::from(vec![
+                            Span::styled("Album: ", key_style),
+                            Span::raw(album.clone()),
+                        ]));
+                    }
+                    self.preview_data = Some(vec![group]);
                 }
             }
             PlaylistItem::Local(path) => {
@@ -281,7 +309,7 @@ impl Pane for RmpcPlaylistsPane {
                     KeyCode::Char('c') => {
                         // [FIXED] Call the new, correctly named `create_playlist_modal` function.
                         let modal = menu::create_playlist_modal(ctx);
-                        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::Modal(Box::new(modal))))?;
+                        ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::Modal(modal)))?;
                     }
                     _ => {}
                 }

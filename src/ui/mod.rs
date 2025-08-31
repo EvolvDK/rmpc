@@ -1360,13 +1360,13 @@ impl UiEventHandler {
                 ui.on_queue_youtube_song(song, ctx)?;
             }
             UiAppEvent::YouTubeLibraryAddSongs(songs) => {
-                self.on_add_songs_to_library(ui, songs, ctx)?;
+                Self::on_add_songs_to_library(ui, songs, ctx)?;
             }
             UiAppEvent::AddPlaylistItemsToQueue(items) => {
                 ui.add_playlist_items_to_queue(items, false, ctx)?;
             }
             UiAppEvent::YouTubeLibraryRemoveSong(song_id) => {
-                self.on_youtube_library_remove_song(ui, &song_id, ctx)?;
+                Self::on_youtube_library_remove_song(ui, &song_id, ctx)?;
             }
             UiAppEvent::ExecuteCommand(cmd_str) => {
                 ui.handle_command(cmd_str, ctx)?;
@@ -1411,7 +1411,7 @@ impl UiEventHandler {
         Ok(())
     }
     
-    fn on_add_songs_to_library(&self, ui: &mut Ui, songs: Vec<YouTubeSong>, ctx: &mut Ctx) -> Result<()> {
+    fn on_add_songs_to_library(ui: &mut Ui, songs: Vec<YouTubeSong>, ctx: &mut Ctx) -> Result<()> {
         let mut new_song_count = 0;
         
         // The YouTube pane holds the controller, which is the source of truth for UI state.
@@ -1437,7 +1437,7 @@ impl UiEventHandler {
         Ok(ctx.render()?)
     }
     
-    fn on_youtube_library_remove_song(&self, ui: &mut Ui, song_id: &str, ctx: &mut Ctx) -> Result<()> {
+    fn on_youtube_library_remove_song(ui: &mut Ui, song_id: &str, ctx: &mut Ctx) -> Result<()> {
         // 1. Persist the change in the database.
         ctx.data_store.remove_song_from_library(song_id)?;
 
