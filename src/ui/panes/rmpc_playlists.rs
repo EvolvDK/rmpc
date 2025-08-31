@@ -316,13 +316,14 @@ impl Pane for RmpcPlaylistsPane {
             }
             Focus::Content => {
                 if let Some(playlist) = self.get_selected_playlist() {
+                    let item_count = playlist.items.len();
                     match event.as_common_action(ctx) {
                         Some(CommonAction::Down) => {
-                            Self::move_selection(&mut self.content_list_state, playlist.items.len(), 1);
+                            Self::move_selection(&mut self.content_list_state, item_count, 1);
                             self.prepare_preview(ctx)?;
                         }
                         Some(CommonAction::Up) => {
-                            Self::move_selection(&mut self.content_list_state, playlist.items.len(), -1);
+                            Self::move_selection(&mut self.content_list_state, item_count, -1);
                             self.prepare_preview(ctx)?;
                         }
                         Some(CommonAction::Confirm) => {

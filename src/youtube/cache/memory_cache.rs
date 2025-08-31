@@ -149,9 +149,39 @@ impl CacheService for MemoryCacheService {
     
     async fn clear_pattern(&self, pattern: &str) -> Result<()> {
         // This is inefficient but necessary to fulfill the trait contract.
-        self.search_cache.write().await.retain(|k, _| !k.contains(pattern));
-        self.stream_url_cache.write().await.retain(|k, _| !k.contains(pattern));
-        self.song_info_cache.write().await.retain(|k, _| !k.contains(pattern));
+        {
+            let mut guard = self.search_cache.write().await;
+            let keys_to_remove: Vec<_> = guard
+                .iter()
+                .filter(|(k, _)| k.contains(pattern))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in keys_to_remove {
+                guard.pop(&key);
+            }
+        }
+        {
+            let mut guard = self.stream_url_cache.write().await;
+            let keys_to_remove: Vec<_> = guard
+                .iter()
+                .filter(|(k, _)| k.contains(pattern))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in keys_to_remove {
+                guard.pop(&key);
+            }
+        }
+        {
+            let mut guard = self.song_info_cache.write().await;
+            let keys_to_remove: Vec<_> = guard
+                .iter()
+                .filter(|(k, _)| k.contains(pattern))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in keys_to_remove {
+                guard.pop(&key);
+            }
+        }
         Ok(())
     }
 }

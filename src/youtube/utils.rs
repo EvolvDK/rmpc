@@ -24,7 +24,7 @@ pub fn parse_song_info_json(json_bytes: &[u8]) -> Result<ResolvedYouTubeSong> {
         // Provide a clear error if neither artist nor uploader is present.
         artist: parsed.artist.context("Missing 'artist' or 'uploader' field")?,
         album: parsed.album,
-        duration_secs: parsed.duration,
+        duration_secs: parsed.duration as u32,
         thumbnail_url: parsed.thumbnail,
     })
 }

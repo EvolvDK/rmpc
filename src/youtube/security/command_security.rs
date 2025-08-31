@@ -160,7 +160,7 @@ impl SecureYtDlpCommand {
                 let mut stderr_lines = BufReader::new(stderr).lines();
                 let mut stderr_output = Vec::new();
                 while let Ok(Some(line)) = stderr_lines.next_line().await {
-                    stderr_output.push(Ok(line));
+                    stderr_output.push(line);
                 }
                 let _ = stderr_tx.send(stderr_output).await;
             });
@@ -178,7 +178,7 @@ impl SecureYtDlpCommand {
             let status = child.wait().await.map_err(|e| YouTubeError::CommandFailed(e.to_string()))?;
             if !status.success() {
                 if let Some(stderr_lines) = stderr_rx.recv().await {
-                    let stderr_str = stderr_lines.into_iter().filter_map(Result::ok).collect::<Vec<_>>().join("\n");
+                    let stderr_str = stderr_lines.join("\n");
                     // Use the same robust parsing as our other commands.
                     let fake_output = std::process::Output { status, stdout: vec![], stderr: stderr_str.into_bytes() };
                     if let Err(e) = self.process_command_output(fake_output) {
