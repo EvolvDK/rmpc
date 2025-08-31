@@ -282,6 +282,18 @@ impl DataStore {
             .execute("DELETE FROM songs WHERE youtube_id = ?1", [youtube_id])?;
         Ok(())
     }
+    
+    /// Retrieves all YouTube song IDs from the library.
+    pub fn get_all_library_song_ids(&self) -> Result<HashSet<String>, DataStoreError> {
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT youtube_id FROM songs")?;
+        let ids_iter = stmt.query_map([], |row| row.get(0))?;
+        let mut ids = HashSet::new();
+        for id in ids_iter {
+            ids.insert(id?);
+        }
+        Ok(ids)
+    }
 
     /// Retrieves all YouTube songs from the library.
     pub fn get_all_library_songs(&self) -> Result<Vec<models::YouTubeSong>, DataStoreError> {
@@ -331,6 +343,43 @@ impl DataStore {
             Err(e) => Err(e.into()),
         }
     }
+    
+    /// Finds a playlist's ID by its name.
+    pub fn find_playlist_id_by_name(&self, name: &str) -> Result<Option<i64>, DataStoreError> {
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT id FROM playlists WHERE name = ?1")?;
+        match stmt.query_row([name], |row| row.get(0)) {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+    
+    /// Retrieves a single playlist and its items by name.
+    pub fn get_playlist_by_name(&self, name: &str) -> Result<Option<models::Playlist>, DataStoreError> {
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT id FROM playlists WHERE name = ?1")?;
+        let id_result: Result<i64, _> = stmt.query_row([name], |row| row.get(0));
+
+        if let Ok(id) = id_result {
+            let items = self.get_playlist_items(id)?;
+            Ok(Some(models::Playlist { id, name: name.to_string(), items }))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Retrieves only the names of all playlists.
+    pub fn get_playlist_names(&self) -> Result<Vec<String>, DataStoreError> {
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT name FROM playlists ORDER BY name COLLATE NOCASE")?;
+        let names_iter = stmt.query_map([], |row| row.get(0))?;
+        let mut names = Vec::new();
+        for name in names_iter {
+            names.push(name?);
+        }
+        Ok(names)
+    }
 
     /// Deletes a playlist and all its items.
     pub fn delete_playlist(&self, playlist_id: i64) -> Result<(), DataStoreError> {
@@ -361,66 +410,61 @@ impl DataStore {
     /// Retrieves all playlists with their items.
     pub fn get_all_playlists(&self) -> Result<Vec<models::Playlist>, DataStoreError> {
         let conn = self.conn.borrow();
-        let mut stmt =
-            conn.prepare("SELECT id, name FROM playlists ORDER BY name COLLATE NOCASE")?;
-        let playlists_iter =
-            stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
-
-        let mut playlists = Vec::new();
-
-        for playlist_result in playlists_iter {
-            let (id, name) = playlist_result?;
-            let items = self.get_playlist_items(id)?;
-            playlists.push(models::Playlist { id, name, items });
-        }
-
-        Ok(playlists)
-    }
-
-    /// Retrieves all items for a given playlist.
-    fn get_playlist_items(
-        &self,
-        playlist_id: i64,
-    ) -> Result<Vec<models::PlaylistItem>, DataStoreError> {
-        let conn = self.conn.borrow();
-        let mut stmt = conn.prepare(
-            "
+        let mut stmt = conn.prepare("
             SELECT
+                p.id,
+                p.name,
                 pi.file_path,
-                v.youtube_id,
-                v.title,
-                v.artist,
-                v.album,
-                v.duration_secs,
-                v.thumbnail_url
-            FROM playlist_items pi
-            LEFT JOIN songs v ON pi.song_youtube_id = v.youtube_id
-            WHERE pi.playlist_id = ?1
-            ORDER BY pi.position
-            ",
-        )?;
+                s.youtube_id,
+                s.title,
+                s.artist,
+                s.album,
+                s.duration_secs,
+                s.thumbnail_url
+            FROM playlists p
+            LEFT JOIN playlist_items pi ON p.id = pi.playlist_id
+            LEFT JOIN songs s ON pi.song_youtube_id = s.youtube_id
+            ORDER BY p.name COLLATE NOCASE, pi.position
+        ")?;
+        let mut playlists_map = std::collections::BTreeMap::new();
 
-        let items_iter = stmt.query_map([playlist_id], |row| {
-            let file_path: Option<String> = row.get(0)?;
-            if let Some(path) = file_path {
-                return Ok(models::PlaylistItem::Local(path));
-            }
-
-            Ok(models::PlaylistItem::YouTube(models::YouTubeSong {
-                youtube_id: row.get(1)?,
-                title: row.get(2)?,
-                artist: row.get(3)?,
-                album: row.get(4)?,
-                duration_secs: row.get(5)?,
-                thumbnail_url: row.get(6)?,
-            }))
+        let rows = stmt.query_map([], |row| {
+            let playlist_id: i64 = row.get(0)?;
+            let playlist_name: String = row.get(1)?;
+            let file_path: Option<String> = row.get(2)?;
+            let youtube_id: Option<String> = row.get(3)?;
+ 
+            let item = if let Some(path) = file_path {
+                Some(models::PlaylistItem::Local(path))
+            } else if let Some(yt_id) = youtube_id {
+                Some(models::PlaylistItem::YouTube(models::YouTubeSong {
+                    youtube_id: yt_id,
+                    title: row.get(4)?,
+                    artist: row.get(5)?,
+                    album: row.get(6)?,
+                    duration_secs: row.get(7)?,
+                    thumbnail_url: row.get(8)?,
+                }))
+            } else {
+                None
+            };
+ 
+            Ok(((playlist_id, playlist_name), item))
         })?;
 
-        let mut items = Vec::new();
-        for item in items_iter {
-            items.push(item?);
+        for row in rows {
+            let ((id, name), item) = row?;
+            let playlist = playlists_map.entry(id).or_insert_with(|| models::Playlist {
+                id,
+                name,
+                items: Vec::new(),
+            });
+            if let Some(playlist_item) = item {
+                playlist.items.push(playlist_item);
+            }
         }
-        Ok(items)
+ 
+        Ok(playlists_map.into_values().collect())
     }
 
     /// Adds a YouTube song to the end of a playlist.
