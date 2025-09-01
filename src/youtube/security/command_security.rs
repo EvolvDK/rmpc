@@ -88,16 +88,10 @@ impl SecureYtDlpCommand {
         format!("https://www.youtube.com/watch?v={}", youtube_id)
     }
     
-    /// Analyzes the output of a finished command, returning the stdout on success
-    /// or a specific, parsed YouTubeError on failure. Adheres to SRP and DRY.
-    fn process_command_output(&self, output: std::process::Output) -> Result<Vec<u8>, YouTubeError> {
+    /// Analyzes the exit status and stderr of a finished command, returning an error on failure.
+    fn check_command_status(&self, output: &std::process::Output) -> Result<(), YouTubeError> {
         if output.status.success() {
-            if output.stdout.len() > self.max_output_size {
-                return Err(YouTubeError::ResponseParseError(format!(
-                    "Output size exceeds maximum of {} bytes", self.max_output_size
-                )));
-            }
-            return Ok(output.stdout);
+            return Ok(());
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -117,6 +111,18 @@ impl SecureYtDlpCommand {
         }
         // Fallback for any other failure.
         Err(YouTubeError::CommandFailed(stderr.to_string()))
+    }
+
+    /// Analyzes the output of a finished command, returning the stdout on success
+    /// or a specific, parsed YouTubeError on failure. Adheres to SRP and DRY.
+    fn process_command_output(&self, output: std::process::Output) -> Result<Vec<u8>, YouTubeError> {
+        self.check_command_status(&output)?;
+        if output.stdout.len() > self.max_output_size {
+            return Err(YouTubeError::ResponseParseError(format!(
+                "Output size exceeds maximum of {} bytes", self.max_output_size
+            )));
+        }
+        Ok(output.stdout)
     }
 
     /// A robust, unified way to execute a command and process its result.
@@ -142,17 +148,18 @@ impl SecureYtDlpCommand {
         let mut command = self.build_base_command();
         command
             .arg("--dump-json")
-            //.arg("--playlist-items")
             .arg(format!("1:{}", max_results))
             .arg(&search_url);
 
         let operation = async {
-            // Use the unified command runner to simplify logic and ensure consistent error handling.
-            let stdout = self.run_and_process_command(command).await?;
+            let mut child = command.spawn().map_err(YouTubeError::from)?;
+            let stdout = child.stdout.take().ok_or_else(|| {
+                YouTubeError::CommandFailed("Failed to capture stdout from yt-dlp".to_string())
+            })?;
+
+            let mut reader = BufReader::new(stdout).lines();
             let mut results_count = 0;
 
-            // The output is a series of JSON objects, one per line. Process them sequentially.
-            let mut reader = BufReader::new(stdout.as_slice()).lines();
             while let Some(line) = reader
                 .next_line()
                 .await
@@ -162,11 +169,17 @@ impl SecureYtDlpCommand {
                     // Emit results as they are parsed. If the emitter is closed, stop processing.
                     if emitter.emit_search_result(song_info, generation).is_err() {
                         log::warn!("Event emitter channel closed, stopping search stream.");
+                        let _ = child.kill().await;
                         break;
                     }
                     results_count += 1;
                 }
             }
+
+            let output = child.wait_with_output().await.map_err(YouTubeError::from)?;
+        
+            // Check the final status of the command for any errors that occurred.
+            self.check_command_status(&output)?;
 
             // Notify completion.
             emitter
