@@ -577,10 +577,9 @@ pub fn init<B: Backend + Write + Send + 'static>(
 }
 
 fn parse_youtube_id_from_url(url: &str) -> Option<String> {
-    const PARAM: &str = "&rmpc_yt_id=";
-    url.find(PARAM)
-        .map(|i| &url[i + PARAM.len()..])
-        .and_then(|s| s.split('&').next())
+    // Standardize on using URL fragments (#) for YouTube IDs.
+    url.rfind('#')
+        .map(|i| &url[i + 1..])
         .filter(|id| !id.is_empty())
         .map(String::from)
 }

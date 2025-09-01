@@ -485,18 +485,15 @@ impl Song {
     }
 
     pub fn youtube_id(&self) -> Option<&str> {
-        if let Some(param_start) = self.file.find("&rmpc_yt_id=") {
-            let value_start = param_start + "&rmpc_yt_id=".len();
-            let remainder = &self.file[value_start..];
-            let youtube_id = remainder.split('&').next().unwrap_or("");
-            if youtube_id.is_empty() {
+        // Standardize on using URL fragments (#) for YouTube IDs.
+        self.file.rfind('#').and_then(|i| {
+            let id = &self.file[i + 1..];
+            if id.is_empty() {
                 None
             } else {
-                Some(youtube_id)
+                Some(id)
             }
-        } else {
-            None
-        }
+        })
     }
 
     pub fn file_name(&self) -> Option<Cow<str>> {
