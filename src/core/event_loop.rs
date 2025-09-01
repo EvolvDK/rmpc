@@ -25,7 +25,7 @@ use crate::{
 };
 use anyhow::Result;
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
-use ratatui::{prelude::Backend, layout::Rect, Terminal};
+use ratatui::{Terminal, layout::Rect, prelude::Backend};
 use std::{
     collections::HashSet,
     io::Write,
@@ -59,9 +59,10 @@ struct App<'a, B: Backend + Write> {
 impl<'a, B: Backend + Write> App<'a, B> {
     /// Creates a new App instance, taking ownership of the terminal and UI.
     fn new(mut ctx: Ctx, mut terminal: Terminal<B>) -> Result<Self> {
-        let size = terminal.size()?;
+		let size = terminal.size().expect("To be able to get terminal size");
+		let area = Rect::new(0, 0, size.width, size.height);
         let mut ui = Ui::new(&ctx)?;
-        ui.before_show(size, &mut ctx)?;
+        ui.before_show(area, &mut ctx).expect("Initial render init to succeed");
 
         let max_fps = f64::from(ctx.config.max_fps);
         let min_frame_duration = Duration::from_secs_f64(1f64 / max_fps);
@@ -70,13 +71,13 @@ impl<'a, B: Backend + Write> App<'a, B> {
             ctx,
             terminal,
             ui,
-            last_render: Instant::now().sub(Duration::from_secs(10)), // Render immediately on start
+            last_render: Instant::now().sub(Duration::from_secs(10)),
             min_frame_duration,
             update_loop_guard: None,
             update_db_loop_guard: None,
             tmux: None,
             is_connected: true,
-            render_wanted: true, // Initial render
+            render_wanted: true,
         })
     }
     
@@ -172,8 +173,26 @@ impl<'a, B: Backend + Write> App<'a, B> {
         let mut key_handle_result = KeyHandleResult::Handled;
         match event {
             AppEvent::UserKeyInput(key_event) => {
-                key_handle_result = self.handle_key_input(key_event)?;
-            }
+                match self.ui.handle_key(&mut key_event.into(), &mut self.ctx) {
+                    Ok(KeyHandleResult::Ignored) => {
+                        // Key was not handled, continue processing
+                    },
+                    Ok(KeyHandleResult::Quit) => {
+                        if let Err(err) = self.ui.on_event(UiEvent::Exit, &mut self.ctx) {
+                            log::error!(error:? = err, event:?; "UI failed to handle quit event");
+                        }
+                        return Ok(KeyHandleResult::Quit);
+                    }
+                    Ok(KeyHandleResult::Handled) => {
+                        // Key was handled, continue processing
+                    }
+                    Err(err) => {
+                        status_error!(err:?; "Error: {}", err.to_status());
+                        log::error!(error:? = err; "Error handling key input");
+                        self.render_wanted = true;
+                    }
+                }
+            },
             AppEvent::UserMouseInput(mouse_event) => self.handle_mouse_input(mouse_event)?,
             AppEvent::ConfigChanged { config, keep_old_theme } => {
                 self.handle_config_change(*config, keep_old_theme)?
@@ -214,11 +233,6 @@ impl<'a, B: Backend + Write> App<'a, B> {
     }
     
     // --- Specific Event Handlers (SRP Applied) ---
-
-    fn handle_key_input(&mut self, key_event: crossterm::event::KeyEvent) -> Result<KeyHandleResult> {
-        let mut key = KeyEvent { inner: key_event, already_handled: false };
-        self.ui.handle_key(&mut key, &mut self.ctx)
-    }
     
     fn handle_mouse_input(&mut self, mouse_event: crate::shared::mouse_event::MouseEvent) -> Result<()> {
         self.ui.handle_mouse_event(mouse_event, &mut self.ctx)
@@ -535,7 +549,7 @@ impl<'a, B: Backend + Write> App<'a, B> {
 
 /// The public entry point to start the event loop. It creates and runs the App.
 pub fn init<B: Backend + Write + Send + 'static>(
-    mut ctx: Ctx,
+    ctx: Ctx,
     event_rx: Receiver<AppEvent>,
     work_rx: Receiver<WorkRequest>,
     terminal: Terminal<B>,
@@ -571,7 +585,7 @@ fn parse_youtube_id_from_url(url: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn try_handle_expired_stream_error(err: &anyhow::Error, ctx: &mut Ctx, ui: &mut Ui) -> bool {
+fn try_handle_expired_stream_error(err: &anyhow::Error, ctx: &mut Ctx, _ui: &mut Ui) -> bool {
     if let Some(MpdError::Mpd(response)) = err.downcast_ref::<MpdError>() {
         if !is_youtube_url_error(&response.code, &response.command, &response.message) {
             return false;
@@ -648,8 +662,6 @@ fn identify_song_for_refresh(
     // Priority 1: Parse the ID directly from the failed URL in the error message.
     if let Some(youtube_id) = parse_youtube_id_from_url(error_message) {
         log::debug!("Identified YouTube song via URL parsing: {}", youtube_id);
-        // We found the ID. Now, check if we have the full metadata in the cache.
-        // If not, that's okay! We'll return `IdOnly`.
         return Some(
             ctx.youtube_library
                 .get(&youtube_id)

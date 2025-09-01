@@ -31,7 +31,6 @@ use tabs::TabsPane;
 use tag_browser::TagBrowserPane;
 use unicase::UniCase;
 use volume::VolumePane;
-use youtube::YouTubePane;
 
 #[cfg(debug_assertions)]
 use self::{frame_count::FrameCountPane, logs::LogsPane};
@@ -40,6 +39,7 @@ use super::{
     widgets::{scan_status::ScanStatus, volume::Volume},
 };
 use crate::{
+	core::data_store::models::YouTubeSong, 
     config::{
         keys::CommonAction,
         tabs::{Pane as ConfigPane, PaneType, SizedPaneOrSplit},
@@ -64,6 +64,40 @@ use crate::{
     },
     MpdQueryResult,
 };
+use youtube::YouTubePane;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ActionOutcome {
+    Handled,
+    Ignored,
+    FocusChanged(Focus),
+    QueueSong(YouTubeSong),
+    AddSongsToLibrary(Vec<YouTubeSong>),
+    ShowContextMenu,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub enum Focus {
+    #[default]
+    Search,
+    Library,
+}
+
+pub trait Component {
+    fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &Ctx) -> Result<()>;
+    fn handle_key_event(
+        &mut self,
+        event: &mut KeyEvent,
+        ctx: &mut Ctx,
+        is_focused: bool,
+    ) -> Result<ActionOutcome>;
+    fn handle_mouse_event(
+        &mut self,
+        event: MouseEvent,
+        ctx: &Ctx,
+        is_focused: bool,
+    ) -> Result<ActionOutcome>;
+}
 
 pub(crate) fn render_preview_data(
     frame: &mut Frame,
