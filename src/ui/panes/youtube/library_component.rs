@@ -127,6 +127,11 @@ impl LibraryComponent {
                 _ => match event.code() {
                     KeyCode::Right => self.song_focus = SongFocus::Preview,
                     KeyCode::Left => self.focus = InternalFocus::Artists,
+                    KeyCode::Char(' ') => {
+                        if let Some(index) = self.song_list_state.selected() {
+                            self.controller.toggle_song_selection(index);
+                        }
+                    }
                     KeyCode::Delete => {
                         if let Some(song) = self.controller.selected_song() {
                             ctx.app_event_sender.send(AppEvent::UiEvent(
