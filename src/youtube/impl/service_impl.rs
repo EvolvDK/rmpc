@@ -96,12 +96,16 @@ impl YouTubeService for YouTubeServiceImpl {
             results_aggregator: Arc::clone(&aggregated_results),
         };
 
-        let search_result = self
-            .execute_with_limits(self.client.search(
+        // For the streaming search operation, we manage the semaphore manually 
+        // and rely on the internal inactivity timeout rather than a global fixed timeout.
+        let _permit = self.operation_semaphore.acquire().await
+            .map_err(|_| YouTubeError::Internal("Semaphore closed".to_string()))?;
+        
+        let search_result = self.client.search(
                 &sanitized_query,
                 &context,
                 &caching_emitter,
-            ))
+            )
             .await;
 
         // 3. After the search, cache the aggregated results.
