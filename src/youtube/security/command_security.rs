@@ -142,7 +142,7 @@ impl SecureYtDlpCommand {
         let mut command = self.build_base_command();
         command
             .arg("--dump-json")
-            .arg("--playlist-items")
+            //.arg("--playlist-items")
             .arg(format!("1:{}", max_results))
             .arg(&search_url);
 
