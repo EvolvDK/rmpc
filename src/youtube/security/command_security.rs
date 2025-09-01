@@ -141,32 +141,25 @@ impl SecureYtDlpCommand {
         let search_url = self.build_search_url(sanitized_query);
         let mut command = self.build_base_command();
         command
-            .arg("--print-json") // Use --print-json for one object per line
+            .arg("--dump-json")
             .arg("--playlist-items")
             .arg(format!("1:{}", max_results))
             .arg(&search_url);
 
         let operation = async {
-            let mut child = command.spawn().map_err(YouTubeError::from)?;
-            let stdout = child.stdout.take().context("Failed to capture stdout").map_err(|e| YouTubeError::Internal(e.to_string()))?;
-            let stderr = child.stderr.take().context("Failed to capture stderr").map_err(|e| YouTubeError::Internal(e.to_string()))?;
-
-            let mut reader = BufReader::new(stdout).lines();
+            // Use the unified command runner to simplify logic and ensure consistent error handling.
+            let stdout = self.run_and_process_command(command).await?;
             let mut results_count = 0;
 
-            // Concurrently read stderr to capture error messages without blocking stdout.
-            let (stderr_tx, mut stderr_rx) = mpsc::channel(1);
-            tokio::spawn(async move {
-                let mut stderr_lines = BufReader::new(stderr).lines();
-                let mut stderr_output = Vec::new();
-                while let Ok(Some(line)) = stderr_lines.next_line().await {
-                    stderr_output.push(line);
-                }
-                let _ = stderr_tx.send(stderr_output).await;
-            });
-
-            while let Some(line) = reader.next_line().await.map_err(|e| YouTubeError::ResponseParseError(e.to_string()))? {
+            // The output is a series of JSON objects, one per line. Process them sequentially.
+            let mut reader = BufReader::new(stdout.as_slice()).lines();
+            while let Some(line) = reader
+                .next_line()
+                .await
+                .map_err(|e| YouTubeError::ResponseParseError(e.to_string()))?
+            {
                 if let Ok(song_info) = parse_song_info_json(line.as_bytes()) {
+                    // Emit results as they are parsed. If the emitter is closed, stop processing.
                     if emitter.emit_search_result(song_info, generation).is_err() {
                         log::warn!("Event emitter channel closed, stopping search stream.");
                         break;
@@ -175,23 +168,14 @@ impl SecureYtDlpCommand {
                 }
             }
 
-            let status = child.wait().await.map_err(|e| YouTubeError::CommandFailed(e.to_string()))?;
-            if !status.success() {
-                if let Some(stderr_lines) = stderr_rx.recv().await {
-                    let stderr_str = stderr_lines.join("\n");
-                    // Use the same robust parsing as our other commands.
-                    let fake_output = std::process::Output { status, stdout: vec![], stderr: stderr_str.into_bytes() };
-                    if let Err(e) = self.process_command_output(fake_output) {
-                        return Err(e);
-                    }
-                }
-                return Err(YouTubeError::CommandFailed("yt-dlp failed with no specific error message.".to_string()));
-            }
-
-            emitter.emit_search_complete(generation, results_count).map_err(|_| YouTubeError::Internal("Emitter closed".to_string()))?;
+            // Notify completion.
+            emitter
+                .emit_search_complete(generation, results_count)
+                .map_err(|_| YouTubeError::Internal("Emitter closed".to_string()))?;
             Ok(())
         };
 
+        // Wrap the entire operation in a timeout.
         timeout(self.timeout, operation)
             .await
             .map_err(|_| YouTubeError::Timeout(self.timeout))?
