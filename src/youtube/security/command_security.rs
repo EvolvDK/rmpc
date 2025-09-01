@@ -17,6 +17,7 @@ use tokio::{
 
 const MAX_OUTPUT_SIZE: usize = 10 * 1024 * 1024; // 10MB
 const DEFAULT_AUDIO_FORMAT: &str = "bestaudio[protocol^=https]";
+const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct SecureYtDlpCommand {
@@ -151,47 +152,50 @@ impl SecureYtDlpCommand {
             .arg(format!("1:{}", max_results))
             .arg(&search_url);
 
-        let operation = async {
-            let mut child = command.spawn().map_err(YouTubeError::from)?;
-            let stdout = child.stdout.take().ok_or_else(|| {
-                YouTubeError::CommandFailed("Failed to capture stdout from yt-dlp".to_string())
-            })?;
+        let mut child = command.spawn().map_err(YouTubeError::from)?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            YouTubeError::CommandFailed("Failed to capture stdout from yt-dlp".to_string())
+        })?;
 
-            let mut reader = BufReader::new(stdout).lines();
-            let mut results_count = 0;
+        let mut reader = BufReader::new(stdout).lines();
+        let mut results_count = 0;
 
-            while let Some(line) = reader
-                .next_line()
-                .await
-                .map_err(|e| YouTubeError::ResponseParseError(e.to_string()))?
-            {
-                if let Ok(song_info) = parse_song_info_json(line.as_bytes()) {
-                    // Emit results as they are parsed. If the emitter is closed, stop processing.
-                    if emitter.emit_search_result(song_info, generation).is_err() {
-                        log::warn!("Event emitter channel closed, stopping search stream.");
-                        let _ = child.kill().await;
-                        break;
+        loop {
+            match timeout(INACTIVITY_TIMEOUT, reader.next_line()).await {
+                // Inactivity timeout occurred.
+                Err(_) => {
+                    log::warn!(
+                        "Search stream for query '{}' timed out due to inactivity after {:?}.",
+                        sanitized_query, INACTIVITY_TIMEOUT
+                    );
+                    let _ = child.kill().await;
+                    break;
+                }
+                // An I/O error occurred while reading from the stream.
+                Ok(Err(e)) => return Err(YouTubeError::ResponseParseError(e.to_string())),
+                // The stream has ended cleanly (EOF).
+                Ok(Ok(None)) => break,
+                // A new line was received.
+                Ok(Ok(Some(line))) => {
+                    if let Ok(song_info) = parse_song_info_json(line.as_bytes()) {
+                        if emitter.emit_search_result(song_info, generation).is_err() {
+                            log::warn!("Event emitter channel closed, stopping search stream.");
+                            let _ = child.kill().await;
+                            break;
+                        }
+                        results_count += 1;
                     }
-                    results_count += 1;
                 }
             }
+        }
 
-            let output = child.wait_with_output().await.map_err(YouTubeError::from)?;
-        
-            // Check the final status of the command for any errors that occurred.
-            self.check_command_status(&output)?;
+        let output = child.wait_with_output().await.map_err(YouTubeError::from)?;
+        self.check_command_status(&output)?;
+        emitter
+            .emit_search_complete(generation, results_count)
+            .map_err(|_| YouTubeError::Internal("Emitter closed".to_string()))?;
 
-            // Notify completion.
-            emitter
-                .emit_search_complete(generation, results_count)
-                .map_err(|_| YouTubeError::Internal("Emitter closed".to_string()))?;
-            Ok(())
-        };
-
-        // Wrap the entire operation in a timeout.
-        timeout(self.timeout, operation)
-            .await
-            .map_err(|_| YouTubeError::Timeout(self.timeout))?
+        Ok(())
     }
 
     pub async fn get_stream_url(&self, youtube_id: &str) -> Result<String, YouTubeError> {
