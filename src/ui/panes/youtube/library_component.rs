@@ -313,13 +313,15 @@ impl LibraryComponent {
         
         let content = if let Some(song) = self.controller.selected_song() {
             let key_style = ctx.config.theme.preview_label_style;
-            let lines = vec![
+            let mut lines = vec![
                 Line::from(vec![Span::styled("Title: ", key_style), Span::raw(&song.title)]),
                 Line::from(vec![Span::styled("Artist: ", key_style), Span::raw(&song.artist)]),
                 Line::from(vec![Span::styled("Album: ", key_style), Span::raw(song.album.as_deref().unwrap_or("N/A"))]),
                 Line::from(vec![Span::styled("Duration: ", key_style), Span::raw(format!("{}s", song.duration_secs))]),
                 Line::from(vec![Span::styled("ID: ", key_style), Span::raw(&song.youtube_id)]),
             ];
+            let url = format!("https://www.youtube.com/watch?v={}", song.youtube_id);
+            lines.push(Line::from(vec![Span::styled("Link: ", key_style), Span::raw(url)]));
             Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false })
         } else {
             Paragraph::new("No song selected")

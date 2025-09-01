@@ -108,6 +108,11 @@ impl RmpcPlaylistsPane {
                             Span::raw(album.clone()),
                         ]));
                     }
+                    let url = format!("https://www.youtube.com/watch?v={}", song.youtube_id);
+                    group.push(Line::from(vec![
+                        Span::styled("Link: ", key_style),
+                        Span::raw(url),
+                    ]));
                     self.preview_data = Some(vec![group]);
                 }
             }
