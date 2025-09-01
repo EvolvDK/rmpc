@@ -12,13 +12,13 @@ use crate::{
         mouse_event::{MouseEvent, MouseEventKind},
     },
     ui::UiAppEvent,
-    youtube::controllers::library_controller::YouTubeLibraryController,
+    youtube::YouTubeLibraryController,
 };
 use anyhow::Result;
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Layout, Position, Rect},
-    style::{Style, Stylize},
+    style::{Stylize},
     text::{Line, Span, Text},
     widgets::{Block, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
@@ -41,7 +41,7 @@ enum SongFocus {
 pub struct LibraryComponent {
     focus: InternalFocus,
     song_focus: SongFocus,
-    controller: YouTubeLibraryController,
+    pub controller: YouTubeLibraryController,
     artist_list_state: ListState,
     song_list_state: ListState,
     artists_area: Rect,
@@ -201,7 +201,7 @@ impl Component for LibraryComponent {
     fn handle_mouse_event(
         &mut self,
         event: MouseEvent,
-        ctx: &mut Ctx,
+        ctx: &Ctx,
         _is_focused: bool,
     ) -> Result<ActionOutcome> {
         let pos: Position = event.into();
