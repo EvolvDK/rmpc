@@ -237,12 +237,25 @@ impl DataStore {
                 "INSERT OR IGNORE INTO queue_youtube_metadata (song_id, youtube_id) VALUES (?1, ?2)",
             )?;
             for song in songs {
-                if let Some(param_start) = song.file.find("&rmpc_yt_id=") {
+                let youtube_id = if let Some(param_start) = song.file.find("&rmpc_yt_id=") {
                     let value_start = param_start + "&rmpc_yt_id=".len();
                     let remainder = &song.file[value_start..];
-                    let youtube_id = remainder.split('&').next().unwrap();
-                    if !youtube_id.is_empty() {
-                        stmt.execute((song.id, youtube_id))?;
+                    remainder.split('&').next()
+                } else if let Some(fragment_start) = song.file.rfind('#') {
+                    // Fallback: extract from fragment if it looks like a YouTube ID
+                    let fragment = &song.file[fragment_start + 1..];
+                    if fragment.len() == 11 {
+                        Some(fragment)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(id) = youtube_id {
+                    if !id.is_empty() {
+                        stmt.execute((song.id, id))?;
                     }
                 }
             }
@@ -323,6 +336,33 @@ impl DataStore {
         }
 
         Ok(songs)
+    }
+
+    /// Checks if a YouTube song exists in the library.
+    pub fn is_song_in_library(&self, youtube_id: &str) -> Result<bool, DataStoreError> {
+        let conn = self.conn.borrow();
+        let mut stmt = conn.prepare("SELECT 1 FROM songs WHERE youtube_id = ?1")?;
+        Ok(stmt.exists([youtube_id])?)
+    }
+
+    /// Updates the metadata of an existing song in the library.
+    pub fn update_song_in_library(&self, song: &models::YouTubeSong) -> Result<(), DataStoreError> {
+        self.conn.borrow().execute(
+            "
+            UPDATE songs
+            SET title = ?2, artist = ?3, album = ?4, duration_secs = ?5, thumbnail_url = ?6
+            WHERE youtube_id = ?1
+            ",
+            (
+                &song.youtube_id,
+                &song.title,
+                &song.artist,
+                &song.album,
+                &song.duration_secs,
+                &song.thumbnail_url,
+            ),
+        )?;
+        Ok(())
     }
 
     // --- Playlist Management ---

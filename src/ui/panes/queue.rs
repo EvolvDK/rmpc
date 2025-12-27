@@ -37,7 +37,7 @@ use crate::{
         mpd_client::{MpdClient, SingleOrRange},
     },
     shared::{
-        events::AppEvent,
+        events::{AppEvent, IdentifiedYouTubeSong, WorkRequest, YouTubeStreamContext},
         ext::{btreeset_ranges::BTreeSetRanges, rect::RectExt},
         key_event::KeyEvent,
         macros::{modal, status_error, status_info, status_warn},
@@ -871,22 +871,57 @@ impl Pane for QueuePane {
                     );
                 }
                 QueueActions::Play => {
-                    if let Some(selected_song) =
-                        self.scrolling_state.get_selected().and_then(|idx| ctx.queue.get(idx))
-                    {
-                        // It's a local file, play it directly
-                        let id = selected_song.id;
-                        ctx.query()
-                            .id(GLOBAL_STATUS_UPDATE)
-                            .replace_id("play_and_get_status")
-                            .query(move |client| {
-                                client.play_id(id)?;
-                                let status = client.get_status()?;
-                                Ok(MpdQueryResult::Status {
-                                    data: status,
-                                    source_event: None,
-                                })
-                            });
+                    if let Some(idx) = self.scrolling_state.get_selected() {
+                        if let Some(selected_song) = ctx.queue.get(idx) {
+                            let youtube_id = ctx.queue_youtube_ids.get(&selected_song.id).cloned()
+                                .or_else(|| {
+                                    if let Some(fragment_start) = selected_song.file.rfind('#') {
+                                        let fragment = &selected_song.file[fragment_start + 1..];
+                                        if fragment.len() == 11 { Some(fragment.to_string()) } else { None }
+                                    } else { None }
+                                });
+
+                            if let Some(yt_id) = youtube_id {
+                                let song_info = ctx.youtube_library.get(&yt_id).cloned();
+                                let context = Some(YouTubeStreamContext {
+                                    old_song_id: selected_song.id,
+                                    position: idx,
+                                    play_after_refresh: true,
+                                });
+
+                                let request = if let Some(song) = song_info {
+                                    WorkRequest::GetYouTubeStreamUrl {
+                                        song: IdentifiedYouTubeSong::Full(song),
+                                        context,
+                                    }
+                                } else {
+                                    WorkRequest::YouTubeGetSongInfo {
+                                        id: yt_id,
+                                        context,
+                                    }
+                                };
+
+                                if let Err(e) = ctx.work_sender.send(request) {
+                                    error!("Failed to send YouTube play request: {}", e);
+                                    status_error!("Failed to request playback: {}", e);
+                                } else {
+                                    status_info!("Requesting playback for YouTube song...");
+                                }
+                            } else {
+                                let id = selected_song.id;
+                                ctx.query()
+                                    .id(GLOBAL_STATUS_UPDATE)
+                                    .replace_id("play_and_get_status")
+                                    .query(move |client| {
+                                        client.play_id(id)?;
+                                        let status = client.get_status()?;
+                                        Ok(MpdQueryResult::Status {
+                                            data: status,
+                                            source_event: None,
+                                        })
+                                    });
+                            }
+                        }
                     }
                 }
                 QueueActions::JumpToCurrent => {
