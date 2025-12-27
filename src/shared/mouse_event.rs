@@ -81,7 +81,7 @@ pub struct MouseEvent {
     pub kind: MouseEventKind,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MouseEventKind {
     LeftClick,
     DoubleClick,

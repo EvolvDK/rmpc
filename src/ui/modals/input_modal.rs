@@ -8,6 +8,7 @@ use ratatui::{
     symbols::border,
     widgets::{Block, Borders, Clear},
 };
+use std::borrow::Cow;
 
 use super::{BUTTON_GROUP_SYMBOLS, Modal, RectExt};
 use crate::{
@@ -32,7 +33,7 @@ pub struct InputModal<'a, C: FnOnce(&mut Ctx, &str) -> Result<()> + 'a> {
     input_area: Rect,
     callback: Option<C>,
     value: String,
-    title: &'a str,
+    title: Cow<'a, str>,
     input_label: &'a str,
 }
 
@@ -71,7 +72,7 @@ impl<'a, C: FnOnce(&mut Ctx, &str) -> Result<()> + 'a> InputModal<'a, C> {
             callback: None,
             value: String::new(),
             input_label: "",
-            title: "",
+            title: Cow::Borrowed(""),
         }
     }
 
@@ -91,8 +92,8 @@ impl<'a, C: FnOnce(&mut Ctx, &str) -> Result<()> + 'a> InputModal<'a, C> {
         self
     }
 
-    pub fn title(mut self, message: &'a str) -> Self {
-        self.title = message;
+    pub fn title<S: Into<Cow<'a, str>>>(mut self, message: S) -> Self {
+        self.title = message.into();
         self
     }
 
@@ -113,7 +114,7 @@ impl<'a, C: FnOnce(&mut Ctx, &str) -> Result<()> + 'a> Modal for InputModal<'a, 
             .border_set(border::ROUNDED)
             .border_style(ctx.config.as_border_style())
             .title_alignment(ratatui::prelude::Alignment::Center)
-            .title(self.title);
+            .title(self.title.as_ref());
 
         let popup_area = frame.area().centered_exact(50, 7);
         frame.render_widget(Clear, popup_area);
