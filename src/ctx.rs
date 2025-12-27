@@ -2,12 +2,14 @@ use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
     ops::AddAssign,
+    // ADDED: Arc is needed for the shared service.
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use bon::bon;
-use crossbeam::channel::{SendError, Sender, bounded};
+use crossbeam::channel::{bounded, SendError, Sender};
 
 use crate::{
     core::data_store::{models::YouTubeSong, DataStore},
@@ -17,11 +19,11 @@ use crate::{
     MpdQueryResult,
     WorkRequest,
     config::{
-        Config,
         album_art::ImageMethod,
         tabs::{PaneType, TabName},
+        Config,
     },
-    core::scheduler::{Scheduler, time_provider::DefaultTimeProvider},
+    core::scheduler::{time_provider::DefaultTimeProvider, Scheduler},
     mpd::{
         client::Client,
         commands::{Song, State, Status},
@@ -30,12 +32,13 @@ use crate::{
     },
     shared::{
         events::ClientRequest,
-        lrc::{Lrc, LrcIndex, get_lrc_path},
+        lrc::{get_lrc_path, Lrc, LrcIndex},
         macros::status_warn,
         mpd_query::MpdQuerySync,
         ring_vec::RingVec,
     },
     ui::StatusMessage,
+    youtube::service::YouTubeService,
 };
 
 #[derive(derive_more::Debug)]
@@ -48,6 +51,8 @@ pub struct Ctx {
     pub(crate) queue: Vec<Song>,
     pub(crate) youtube_library: HashMap<String, YouTubeSong>,
     pub(crate) queue_youtube_ids: HashMap<u32, String>,
+    #[debug(skip)]
+    pub(crate) youtube_service: Arc<dyn YouTubeService>,
     pub(crate) active_tab: TabName,
     pub(crate) supported_commands: HashSet<String>,
     pub(crate) db_update_start: Option<Instant>,
@@ -73,12 +78,13 @@ pub struct Ctx {
 impl Ctx {
     pub(crate) fn try_new(
         client: &mut Client<'_>,
-        mut config: Config,
+        config: Arc<Config>,
         data_store: DataStore,
         app_event_sender: Sender<AppEvent>,
         work_sender: Sender<WorkRequest>,
         client_request_sender: Sender<ClientRequest>,
         mut scheduler: Scheduler<(Sender<AppEvent>, Sender<ClientRequest>), DefaultTimeProvider>,
+        youtube_service: Arc<dyn YouTubeService>,
     ) -> Result<Self> {
         let supported_commands: HashSet<String> = client.commands()?.0.into_iter().collect();
         let sticker_support_needed = config.sticker_support_needed();
@@ -105,25 +111,28 @@ impl Ctx {
             .collect();
         let queue_youtube_ids = data_store.get_all_queue_youtube_mappings()?;
         log::info!("Queue synchronization complete.");
-
+        
+        let mut mutable_config = Arc::clone(&config);
         if !supported_commands.contains("albumart") || !supported_commands.contains("readpicture") {
-            config.album_art.method = ImageMethod::None;
+            let cfg_mut = Arc::make_mut(&mut mutable_config);
+            cfg_mut.album_art.method = ImageMethod::None;
             status_warn!("Album art is disabled because it is not supported by MPD");
         }
 
-        log::info!(config:? = config; "Resolved config");
+        log::info!(config:? = mutable_config; "Resolved config");
 
-        let active_tab = config.tabs.names.first().context("Expected at least one tab")?.clone();
+        let active_tab = mutable_config.tabs.names.first().context("Expected at least one tab")?.clone();
         scheduler.start();
         Ok(Self {
             mpd_version: client.version(),
             lrc_index: LrcIndex::default(),
-            config: std::sync::Arc::new(config),
+            config: mutable_config,
             data_store,
             status,
             queue,
             youtube_library,
             queue_youtube_ids,
+            youtube_service,
             active_tab,
             supported_commands,
             db_update_start: None,

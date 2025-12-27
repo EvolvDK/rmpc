@@ -111,7 +111,17 @@ impl SearchComponent {
                 }
                 Ok(ActionOutcome::Handled)
             }
-            KeyCode::Right => Ok(ActionOutcome::FocusChanged(Focus::Library)),
+            KeyCode::Right => {
+                if self.input.visual_cursor() == self.input.value().chars().count() {
+                    Ok(ActionOutcome::FocusChanged(Focus::Library))
+                } else if self.input.handle_event(&Event::Key(event.inner())).is_some() {
+                    self.controller.filter_results(self.input.value());
+                    self.sync_list_selection();
+                    Ok(ActionOutcome::Handled)
+                } else {
+                    Ok(ActionOutcome::Ignored)
+                }
+            }
             _ => {
                 if self.input.handle_event(&Event::Key(event.inner())).is_some() {
                     self.controller.filter_results(self.input.value());
@@ -179,7 +189,7 @@ impl SearchComponent {
                 self.controller.next_search_mode();
                 true
             }
-            (KeyCode::Char('f'), mods) if mods.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
+            (KeyCode::Char('f'), mods) if mods.contains(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.controller.previous_search_mode();
                 true
             }
@@ -208,10 +218,11 @@ impl Component for SearchComponent {
             .block(Block::bordered().title(title).border_style(border_style));
         frame.render_widget(input_widget, self.input_area);
         if self.focus == InternalFocus::SearchInput {
-            frame.set_cursor(
-                self.input_area.x + self.input.visual_cursor() as u16 + 1,
-                self.input_area.y + 1,
-            );
+            let cursor_pos = Position {
+                x: self.input_area.x + self.input.visual_cursor() as u16 + 1,
+                y: self.input_area.y + 1,
+            };
+            frame.set_cursor_position(cursor_pos);
         }
 
         // Search Results

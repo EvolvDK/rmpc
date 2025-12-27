@@ -14,20 +14,19 @@ mod utils;
 
 // --- Public API Re-exports (Prelude) ---
 
+// Re-export controller types for UI consumption.
+pub use controllers::{YouTubeLibraryController, YouTubeSearchController};
+
 // Re-export the primary service interface and its factory.
 pub use r#impl::factory::YouTubeServiceFactory;
 pub use r#impl::register::YouTubeServiceRegistry;
-pub use service::{YouTubeService, YouTubeServiceConfig};
+pub use service::YouTubeService;
 
 // Re-export core types used frequently by consumers of this module.
 pub use types::{CacheStats, ResolvedYouTubeSong};
 
-// Re-export the primary error type for easy access.
-pub use error::YouTubeError;
-
 // Re-export the public interfaces for the client and cache for dependency injection.
-pub use client::YouTubeClient;
-pub use cache::CacheService;
+pub use service::{CacheService, YouTubeClient};
 
 // Internal utility function, not part of the public API but used by submodules.
 use utils::parse_song_info_json;

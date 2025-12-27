@@ -15,7 +15,7 @@ impl std::fmt::Debug for DebugSkimMatcher {
 
 impl Default for DebugSkimMatcher {
     fn default() -> Self {
-        Self(SkimMatcherV2::default())
+        Self(SkimMatcherV2::default().ignore_case())
     }
 }
 
@@ -70,6 +70,7 @@ pub struct YouTubeSearchController {
     raw_results: Vec<ResolvedYouTubeSong>,
     filtered_results: Vec<FilteredSearchResult>,
     current_query: String,
+    search_query: String,
     is_loading: bool,
     matcher: DebugSkimMatcher,
     pub regex_error: Option<String>,
@@ -107,7 +108,8 @@ impl YouTubeSearchController {
 
     /// Prepares for a new search, clearing previous results and returning the new generation ID.
     pub fn start_new_search(&mut self, query: String) -> u64 {
-        self.current_query = query;
+        self.current_query = query.clone();
+        self.search_query = query;
         self.search_generation += 1;
         self.is_loading = true;
         self.raw_results.clear();
@@ -140,7 +142,7 @@ impl YouTubeSearchController {
 
     fn apply_current_filter(&mut self) {
 		self.regex_error = None;
-        if self.current_query.is_empty() {
+        if self.current_query.is_empty() || self.current_query == self.search_query {
             self.filtered_results = self.raw_results.iter().map(|song| FilteredSearchResult {
                 score: 100, song: song.clone(), highlighted_indices: vec![]
             }).collect();
