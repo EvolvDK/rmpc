@@ -351,8 +351,29 @@ impl<'ui> Ui<'ui> {
         Ok(ctx.render()?)
     }
 
-    pub fn on_youtube_song_info_fetched(&mut self, song: YouTubeSong, ctx: &mut Ctx) -> Result<()> {
-        self.on_ui_app_event(UiAppEvent::YouTubeLibraryAddSongs(vec![song]), ctx)?;
+    pub fn on_youtube_song_info_fetched(
+        &mut self,
+        song: YouTubeSong,
+        context: Option<crate::shared::events::YouTubeStreamContext>,
+        ctx: &mut Ctx,
+    ) -> Result<()> {
+        if context.is_none() {
+            self.on_ui_app_event(UiAppEvent::YouTubeLibraryAddSongs(vec![song]), ctx)?;
+        } else {
+            // Update the global cache
+            ctx.youtube_library.insert(song.youtube_id.clone(), song.clone());
+            
+            // If the song is already in the library, update its metadata in the database.
+            // This keeps the library fresh without adding transient songs.
+            if ctx.data_store.is_song_in_library(&song.youtube_id)? {
+                if let Err(e) = ctx.data_store.update_song_in_library(&song) {
+                    log::error!("Failed to update metadata for song '{}' in library: {}", song.title, e);
+                } else {
+                    // Refresh the playlists pane to reflect the changes
+                    ctx.app_event_sender.send(AppEvent::UiEvent(UiAppEvent::RefreshRmpcPlaylists))?;
+                }
+            }
+        }
 
         if self.pending_youtube_imports > 0 {
             self.pending_youtube_imports -= 1;
@@ -398,7 +419,6 @@ impl<'ui> Ui<'ui> {
             });
         }
 
-        let library_songs = &ctx.youtube_library;
         let mut added_count = 0;
         let mut skipped_count = 0;
 
@@ -433,18 +453,19 @@ impl<'ui> Ui<'ui> {
                     });
                 }
                 PlaylistItem::YouTube(song) => {
-                    if let Some(song) = library_songs.get(&song.youtube_id) {
-						ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-							song: crate::shared::events::IdentifiedYouTubeSong::Full(song.clone()),
-							context: None,
-						})?;
-                    } else {
-                        status_warn!(
-                            "Could not find YouTube song with ID {} in library, skipping.",
-                            song.youtube_id
-                        );
-                        added_count -= 1; // It was not actually added
+                    // Always update the cache with the metadata we have.
+                    // This ensures the song info is available for the queue even if the library cache was cold.
+                    if !ctx.youtube_library.contains_key(&song.youtube_id) {
+                        ctx.youtube_library.insert(song.youtube_id.clone(), song.clone());
                     }
+
+                    Self::trigger_metadata_refresh_if_needed(&song, ctx)?;
+
+                    // Now we can safely request the stream URL with the full song info.
+                    ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
+                        song: crate::shared::events::IdentifiedYouTubeSong::Full(song),
+                        context: None,
+                    })?;
                 }
             }
         }
@@ -477,6 +498,7 @@ impl<'ui> Ui<'ui> {
                         ctx.data_store.add_local_file_to_playlist(playlist_id, &path)?;
                     }
                     PlaylistItem::YouTube(song) => {
+                        Self::trigger_metadata_refresh_if_needed(&song, ctx)?;
                         ctx.data_store.add_song_to_library(&song)?;
                         ctx.data_store
                             .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
@@ -519,6 +541,7 @@ impl<'ui> Ui<'ui> {
                     ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
                 }
                 PlaylistItem::YouTube(song) => {
+                    Self::trigger_metadata_refresh_if_needed(song, ctx)?;
                     ctx.data_store.add_song_to_library(song)?;
                     ctx.data_store
                         .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
@@ -685,7 +708,23 @@ impl<'ui> Ui<'ui> {
         let items: Vec<PlaylistItem> = ctx
             .queue
             .iter()
-            .map(|song| PlaylistItem::Local(song.file.clone()))
+            .map(|song| {
+                if let Some(yt_id) = ctx.queue_youtube_ids.get(&song.id) {
+                    if let Some(yt_song) = ctx.youtube_library.get(yt_id) {
+                        return PlaylistItem::YouTube(yt_song.clone());
+                    } else {
+                        return PlaylistItem::YouTube(crate::core::data_store::models::YouTubeSong {
+                            youtube_id: yt_id.clone(),
+                            title: "Unknown Title".to_string(),
+                            artist: "Unknown Artist".to_string(),
+                            album: None,
+                            duration_secs: 0,
+                            thumbnail_url: None,
+                        });
+                    }
+                }
+                PlaylistItem::Local(song.file.clone())
+            })
             .collect();
 
         if items.is_empty() {
@@ -707,8 +746,16 @@ impl<'ui> Ui<'ui> {
         };
 
         for item in items.iter() {
-            if let PlaylistItem::Local(path) = item {
-                ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
+            match item {
+                PlaylistItem::Local(path) => {
+                    ctx.data_store.add_local_file_to_playlist(playlist_id, path)?;
+                }
+                PlaylistItem::YouTube(song) => {
+                    Self::trigger_metadata_refresh_if_needed(song, ctx)?;
+                    ctx.data_store.add_song_to_library(song)?;
+                    ctx.data_store
+                        .add_youtube_song_to_playlist(playlist_id, &song.youtube_id)?;
+                }
             }
         }
 
@@ -727,8 +774,6 @@ impl<'ui> Ui<'ui> {
             }
         };
 
-        let library_songs = &ctx.youtube_library;
-
         status_info!("Loading {} items from playlist '{}'...", items.len(), name);
         for item in items {
             match item {
@@ -739,15 +784,13 @@ impl<'ui> Ui<'ui> {
                     });
                 }
                 PlaylistItem::YouTube(song) => {
-                    let id = song.youtube_id;
-                    if let Some(song) = library_songs.get(&id) {
-                        ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
-                            song: crate::shared::events::IdentifiedYouTubeSong::Full(song.clone()),
-                            context: None,
-                        })?;
-                    } else {
-                        status_warn!("Could not find YouTube song with ID {} in library, skipping.", id);
+                    if !ctx.youtube_library.contains_key(&song.youtube_id) {
+                        ctx.youtube_library.insert(song.youtube_id.clone(), song.clone());
                     }
+                    ctx.work_sender.send(WorkRequest::GetYouTubeStreamUrl {
+                        song: crate::shared::events::IdentifiedYouTubeSong::Full(song),
+                        context: None,
+                    })?;
                 }
             }
         }
@@ -968,8 +1011,27 @@ impl<'ui> Ui<'ui> {
     fn sync_new_youtube_song_in_queue(&mut self, song_id: u32, song: YouTubeSong, ctx: &mut Ctx) -> Result<()> {
         // This links the temporary MPD song ID to the permanent YouTube ID in our local DB.
         ctx.data_store.add_youtube_song_to_queue(song_id, &song.youtube_id)?;
+
+        // Ensure the metadata is available in the cache, even if not in the persistent library.
+        if !ctx.youtube_library.contains_key(&song.youtube_id) {
+            ctx.youtube_library.insert(song.youtube_id.clone(), song.clone());
+        }
+
         // This updates the in-memory map for the current session.
         ctx.queue_youtube_ids.insert(song_id, song.youtube_id.clone());
+        Ok(())
+    }
+
+    fn trigger_metadata_refresh_if_needed(song: &YouTubeSong, ctx: &Ctx) -> Result<()> {
+        if song.title.eq_ignore_ascii_case("Unknown Title")
+            || song.artist.eq_ignore_ascii_case("Unknown Artist")
+            || song.duration_secs == 0
+        {
+            ctx.work_sender.send(WorkRequest::YouTubeGetSongInfo {
+                id: song.youtube_id.clone(),
+                context: None,
+            })?;
+        }
         Ok(())
     }
 }
@@ -1423,7 +1485,10 @@ impl UiEventHandler {
                     continue; // Skip to next song on failure
                 }
                 
-                // 2. If successful, update the controller's state.
+                // 2. Update the global cache
+                ctx.youtube_library.insert(song.youtube_id.clone(), song.clone());
+
+                // 3. If successful, update the controller's state.
                 pane.add_song_to_library(song);
                 new_song_count += 1;
             }

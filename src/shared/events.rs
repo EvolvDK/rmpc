@@ -21,7 +21,8 @@ use crate::{
     core::data_store::models::YouTubeSong,
     mpd::commands::IdleEvent,
     ui::UiAppEvent,
-    youtube::ResolvedYouTubeSong,  // Use the actual type from youtube.rs
+    youtube::{
+		ResolvedYouTubeSong, error::YouTubeError},
 };
 
 /// Context for YouTube stream refresh operations
@@ -33,10 +34,6 @@ pub(crate) struct YouTubeStreamContext {
     pub play_after_refresh: bool,
 }
 
-/// Legacy alias for backward compatibility during migration
-/// Will be removed once all usages are updated
-pub(crate) type RefreshContext = YouTubeStreamContext;
-
 /// Client request types - follows ISP with focused interfaces
 #[derive(Debug)]
 #[allow(unused)]
@@ -44,6 +41,13 @@ pub(crate) enum ClientRequest {
     Query(MpdQuery),
     QuerySync(MpdQuerySync),
     Command(MpdCommand),
+}
+
+/// Represent an identified song, which might be missing metadata.
+#[derive(Debug, Clone)]
+pub enum IdentifiedYouTubeSong {
+    Full(YouTubeSong),
+    IdOnly(String),
 }
 
 /// Work request types - each variant has single responsibility
@@ -64,23 +68,19 @@ pub(crate) enum WorkRequest {
         generation: u64,
     },
     GetYouTubeStreamUrl {
-        song: YouTubeSong,
+        song: IdentifiedYouTubeSong,
         context: Option<YouTubeStreamContext>,
-    },
-    RefreshYouTubeStream {
-        old_song_id: u32,
-        position: u32,
-        song: YouTubeSong,
     },
     YouTubeGetSongInfo {
         id: String,
+        context: Option<YouTubeStreamContext>,
     },
 }
 
 /// Work completion results - follows SRP with specific result types
 /// Each variant represents completion of a single type of work
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)] // the instances are short lived events, its fine.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum WorkDone {
     LyricsIndexed { 
         index: LrcIndex 
@@ -101,24 +101,24 @@ pub(crate) enum WorkDone {
         context: Option<YouTubeStreamContext>,
     },
     YouTubeStreamUrlFailed {
+        song: IdentifiedYouTubeSong,
+        context: Option<YouTubeStreamContext>,
+        error: YouTubeError,
+    },
+    MpdCommandFinished {
+        id: &'static str,
+        target: Option<PaneType>,
+        data: MpdQueryResult,
+    },
+    YouTubeSongInfoFetched {
         song: YouTubeSong,
         context: Option<YouTubeStreamContext>,
     },
-    YouTubeStreamRefreshed {
-        new_url: String,
-        song: YouTubeSong,
-        old_song_id: u32,
-        position: u32,
+    YouTubeSongInfoFailed {
+		id: String,
+		error: YouTubeError,
+		context: Option<YouTubeStreamContext>,
     },
-    YouTubeStreamRefreshFailed {
-        song_title: String,
-    },
-    MpdCommandFinished { 
-        id: &'static str, 
-        target: Option<PaneType>, 
-        data: MpdQueryResult 
-    },
-    YouTubeSongInfoFetched(YouTubeSong),
     None,
 }
 

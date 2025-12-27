@@ -11,7 +11,6 @@ use crate::{
         events::{AppEvent, ClientRequest, IdentifiedYouTubeSong, WorkDone, WorkRequest, YouTubeStreamContext},
         ext::error::ErrorExt,
         id::{self, Id},
-        key_event::KeyEvent,
         macros::{status_error, status_warn},
         mpd_query::{
             run_status_update, EXTERNAL_COMMAND, GLOBAL_QUEUE_UPDATE, GLOBAL_STATUS_UPDATE,
@@ -58,7 +57,7 @@ struct App<'a, B: Backend + Write> {
 
 impl<'a, B: Backend + Write> App<'a, B> {
     /// Creates a new App instance, taking ownership of the terminal and UI.
-    fn new(mut ctx: Ctx, mut terminal: Terminal<B>) -> Result<Self> {
+    fn new(mut ctx: Ctx, terminal: Terminal<B>) -> Result<Self> {
 		let size = terminal.size().expect("To be able to get terminal size");
 		let area = Rect::new(0, 0, size.width, size.height);
         let mut ui = Ui::new(&ctx)?;
@@ -170,7 +169,7 @@ impl<'a, B: Backend + Write> App<'a, B> {
     
     /// The main event dispatcher. All events from the channel are processed here.
     fn handle_app_event(&mut self, event: AppEvent) -> Result<KeyHandleResult> {
-        let mut key_handle_result = KeyHandleResult::Handled;
+        let key_handle_result = KeyHandleResult::Handled;
         match event {
             AppEvent::UserKeyInput(key_event) => {
                 match self.ui.handle_key(&mut key_event.into(), &mut self.ctx) {
@@ -377,14 +376,14 @@ impl<'a, B: Backend + Write> App<'a, B> {
                     }
                 }
                 WorkDone::YouTubeSongInfoFetched { song, context } => {
-                    if let Some(stream_context) = context {
+                    if let Some(stream_context) = context.as_ref() {
                         let request = WorkRequest::GetYouTubeStreamUrl {
                             song: IdentifiedYouTubeSong::Full(song.clone()),
-                            context: Some(stream_context),
+                            context: Some(stream_context.clone()),
                         };
                         self.ctx.work_sender.send(request)?;
                     }
-                    self.ui.on_youtube_song_info_fetched(song, &mut self.ctx)?;
+                    self.ui.on_youtube_song_info_fetched(song, context, &mut self.ctx)?;
                 }
                 WorkDone::YouTubeSongInfoFailed { id, error, context } => {
                     status_warn!("Could not fetch info for YouTube video ID '{}': {}", id, error);
@@ -518,6 +517,40 @@ impl<'a, B: Backend + Write> App<'a, B> {
 
                 run_external(command.clone(), env);
             }
+            
+            // Check if the new song is a YouTube song with incomplete metadata and refresh if needed.
+            if let Some(song_id) = self.ctx.status.songid {
+                if let Some(yt_id) = self.ctx.queue_youtube_ids.get(&song_id).cloned() {
+                    let needs_refresh = if let Some(yt_song) = self.ctx.youtube_library.get(&yt_id) {
+                        yt_song.title.eq_ignore_ascii_case("Unknown Title")
+                            || yt_song.artist.eq_ignore_ascii_case("Unknown Artist")
+                            || yt_song.duration_secs == 0
+                    } else {
+                        true
+                    };
+
+                    if needs_refresh {
+                        log::info!(
+                            "Metadata missing/incomplete for song {} (YouTube ID: {}), triggering refresh.",
+                            song_id,
+                            yt_id
+                        );
+                        let context = YouTubeStreamContext {
+                            old_song_id: song_id,
+                            position: self.ctx.status.song.unwrap_or(0) as usize,
+                            play_after_refresh: self.ctx.status.state == State::Play,
+                        };
+                        let request = WorkRequest::YouTubeGetSongInfo {
+                            id: yt_id,
+                            context: Some(context),
+                        };
+                        if let Err(e) = self.ctx.work_sender.send(request) {
+                            log::error!("Failed to send YouTube info fetch request: {}", e);
+                        }
+                    }
+                }
+            }
+            
             self.ctx.song_played = Some(Duration::ZERO);
             self.ui.on_event(UiEvent::SongChanged, &mut self.ctx)?;
         }
@@ -574,14 +607,6 @@ pub fn init<B: Backend + Write + Send + 'static>(
             }
             app.terminal
         })
-}
-
-fn parse_youtube_id_from_url(url: &str) -> Option<String> {
-    // Standardize on using URL fragments (#) for YouTube IDs.
-    url.rfind('#')
-        .map(|i| &url[i + 1..])
-        .filter(|id| !id.is_empty())
-        .map(String::from)
 }
 
 fn try_handle_expired_stream_error(err: &anyhow::Error, ctx: &mut Ctx, _ui: &mut Ui) -> bool {
@@ -655,34 +680,29 @@ fn is_youtube_url_error(code: &ErrorCode, command: &str, message: &str) -> bool 
 
 fn identify_song_for_refresh(
     song_id: u32,
-    error_message: &str,
+    _error_message: &str,
     ctx: &Ctx,
 ) -> Option<IdentifiedYouTubeSong> {
-    // Priority 1: Parse the ID directly from the failed URL in the error message.
-    if let Some(youtube_id) = parse_youtube_id_from_url(error_message) {
-        log::debug!("Identified YouTube song via URL parsing: {}", youtube_id);
-        return Some(
-            ctx.youtube_library
-                .get(&youtube_id)
-                .cloned()
-                .map(IdentifiedYouTubeSong::Full)
-                .unwrap_or(IdentifiedYouTubeSong::IdOnly(youtube_id)),
-        );
-    }
+    // Priority 1: Get the song from the queue and extract the ID from its URL.
+    // This is the most reliable source as it's exactly what was added to MPD.
+    let youtube_id = ctx
+        .queue
+        .iter()
+        .find(|s| s.id == song_id)
+        .and_then(|s| s.youtube_id().map(String::from))
+        // Priority 2: Fallback to database lookup if the song is somehow missing from the queue.
+        .or_else(|| {
+            log::debug!("Falling back to database lookup for song_id={}", song_id);
+            ctx.data_store.get_youtube_id_for_song(song_id).ok().flatten().map(|(id, _)| id)
+        })?;
 
-    // Priority 2: Fallback to the database lookup for older or unusual cases.
-    log::debug!("Falling back to database lookup for song_id={}", song_id);
-    if let Ok(Some((youtube_id, _))) = ctx.data_store.get_youtube_id_for_song(song_id) {
-        return Some(
-            ctx.youtube_library
-                .get(&youtube_id)
-                .cloned()
-                .map(IdentifiedYouTubeSong::Full)
-                .unwrap_or(IdentifiedYouTubeSong::IdOnly(youtube_id)),
-        );
-    }
-
-    None
+    Some(
+        ctx.youtube_library
+            .get(&youtube_id)
+            .cloned()
+            .map(IdentifiedYouTubeSong::Full)
+            .unwrap_or(IdentifiedYouTubeSong::IdOnly(youtube_id)),
+    )
 }
 
 fn handle_idle_event(event: IdleEvent, ctx: &Ctx, result_ui_evs: &mut HashSet<UiEvent>) {
