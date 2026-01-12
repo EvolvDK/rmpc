@@ -29,14 +29,20 @@ pub struct AlbumsPane {
     stack: DirStack<DirOrSong, ListState>,
     browser: Browser<DirOrSong>,
     initialized: bool,
+    youtube_manager: std::sync::Arc<crate::youtube::manager::YouTubeManager>,
 }
 
 const INIT: &str = "init";
 const FETCH_DATA: &str = "fetch_data";
 
 impl AlbumsPane {
-    pub fn new(_ctx: &Ctx) -> Self {
-        Self { stack: DirStack::default(), browser: Browser::new(), initialized: false }
+    pub fn new(ctx: &Ctx) -> Self {
+        Self {
+            stack: DirStack::default(),
+            browser: Browser::new(),
+            initialized: false,
+            youtube_manager: std::sync::Arc::clone(&ctx.youtube_manager),
+        }
     }
 }
 
@@ -49,9 +55,13 @@ impl Pane for AlbumsPane {
 
     fn before_show(&mut self, ctx: &Ctx) -> Result<()> {
         if !self.initialized {
+            let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
             ctx.query().id(INIT).replace_id(INIT).target(PaneType::Albums).query(move |client| {
-                let result = client.list_tag(Tag::Album, None).context("Cannot list tags")?;
-                Ok(MpdQueryResult::LsInfo { data: result.0, path: None })
+                let mut result = client.list_tag(Tag::Album, None).context("Cannot list tags")?.0;
+                if let Ok(yt_albums) = youtube_manager.db.lock().list_albums() {
+                    result.extend(yt_albums);
+                }
+                Ok(MpdQueryResult::LsInfo { data: result, path: None })
             });
             self.initialized = true;
         }
@@ -62,11 +72,15 @@ impl Pane for AlbumsPane {
     fn on_event(&mut self, event: &mut UiEvent, _is_visible: bool, ctx: &Ctx) -> Result<()> {
         match event {
             UiEvent::Database => {
+                let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
                 ctx.query().id(INIT).replace_id(INIT).target(PaneType::Albums).query(
                     move |client| {
-                        let result =
-                            client.list_tag(Tag::Album, None).context("Cannot list tags")?;
-                        Ok(MpdQueryResult::LsInfo { data: result.0, path: None })
+                        let mut result =
+                            client.list_tag(Tag::Album, None).context("Cannot list tags")?.0;
+                        if let Ok(yt_albums) = youtube_manager.db.lock().list_albums() {
+                            result.extend(yt_albums);
+                        }
+                        Ok(MpdQueryResult::LsInfo { data: result, path: None })
                     },
                 );
             }
@@ -115,6 +129,7 @@ impl Pane for AlbumsPane {
             (INIT, MpdQueryResult::LsInfo { data, path: _ }) => {
                 let root = data
                     .into_iter()
+                    .unique()
                     .sorted_by(|a, b| {
                         StringCompare::from(ctx.config.browser_song_sort.as_ref()).compare(a, b)
                     })
@@ -147,8 +162,17 @@ impl BrowserPane<DirOrSong> for AlbumsPane {
         &self,
         item: DirOrSong,
     ) -> impl FnOnce(&mut Client<'_>) -> Result<Vec<Song>> + Clone + 'static {
+        let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
+        // TODO: This logic is very similar to TagBrowserPane::list_songs_in_item.
+        // Consider unifying them.
         move |client| match item {
-            DirOrSong::Dir { name, .. } => Ok(client.find(&[Filter::new(Tag::Album, &name)])?),
+            DirOrSong::Dir { name, .. } => {
+                let mut songs = client.find(&[Filter::new(Tag::Album, &name)])?;
+                if let Ok(yt_tracks) = youtube_manager.db.lock().list_tracks_by_album(&name) {
+                    songs.extend(yt_tracks.into_iter().map(Song::from));
+                }
+                Ok(songs)
+            }
             DirOrSong::Song(song) => Ok(vec![song.clone()]),
         }
     }
@@ -160,17 +184,27 @@ impl BrowserPane<DirOrSong> for AlbumsPane {
             return Ok(());
         };
 
+        // TODO: This logic is very similar to TagBrowserPane::fetch_data.
+        // Consider unifying them.
         match self.stack.path().as_slice() {
             [_album] => {}
             [] => {
                 let sort_order = ctx.config.browser_song_sort.clone();
+                let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
                 ctx.query()
                     .id(FETCH_DATA)
                     .replace_id("albums_data")
                     .target(PaneType::Albums)
                     .query(move |client| {
-                        let data = client
-                            .find(&[Filter::new(Tag::Album, current)])?
+                        let mut data = client.find(&[Filter::new(Tag::Album, current.clone())])?;
+
+                        if let Ok(yt_tracks) =
+                            youtube_manager.db.lock().list_tracks_by_album(&current)
+                        {
+                            data.extend(yt_tracks.into_iter().map(Song::from));
+                        }
+
+                        let data = data
                             .into_iter()
                             .sorted_by(|a, b| {
                                 a.with_custom_sort(&sort_order)

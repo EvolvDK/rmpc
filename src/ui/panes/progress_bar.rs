@@ -93,6 +93,7 @@ impl Pane for ProgressBarPane {
 
                 ctx.render()?;
             }
+            MouseEventKind::Release => {}
             _ => {}
         }
 

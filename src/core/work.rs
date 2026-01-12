@@ -12,6 +12,7 @@ use crate::{
         mpd_query::MpdCommand as QueryCmd,
         ytdlp::YtDlp,
     },
+    youtube::manager::YouTubeManager,
 };
 
 pub fn init(
@@ -19,12 +20,19 @@ pub fn init(
     client_tx: Sender<ClientRequest>,
     event_tx: Sender<AppEvent>,
     config: Arc<Config>,
+    youtube_manager: Arc<YouTubeManager>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new().name("work".to_owned()).spawn(move || {
         let ytdlp = config.cache_dir.as_ref().map(|dir| YtDlp::new(dir.clone()));
         let cli_config = config.as_ref().into();
         while let Ok(req) = work_rx.recv() {
-            let result = handle_work_request(req, &client_tx, &cli_config, ytdlp.as_ref());
+            let result = handle_work_request(
+                req,
+                &client_tx,
+                &cli_config,
+                ytdlp.as_ref(),
+                Arc::clone(&youtube_manager),
+            );
             try_skip!(
                 event_tx.send(AppEvent::WorkDone(result)),
                 "Failed to send work done notification"
@@ -38,10 +46,11 @@ fn handle_work_request(
     client_tx: &Sender<ClientRequest>,
     config: &CliConfig,
     ytdlp: Option<&YtDlp>,
+    youtube_manager: Arc<YouTubeManager>,
 ) -> Result<WorkDone> {
     match request {
         WorkRequest::Command(command) => {
-            let callback = command.execute(config)?; // TODO log
+            let callback = command.execute(config, Some(youtube_manager))?; // TODO log
             try_skip!(
                 client_tx.send(ClientRequest::Command(QueryCmd { callback })),
                 "Failed to send client request to complete command"

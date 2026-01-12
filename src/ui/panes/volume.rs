@@ -138,6 +138,7 @@ impl Pane for VolumePane {
 
                 ctx.render()?;
             }
+            MouseEventKind::Release => {}
             _ => {}
         }
 

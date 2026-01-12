@@ -17,9 +17,7 @@ use crate::{
     MpdQueryResult,
     config::{
         keys::{
-            CommonAction,
-            GlobalAction,
-            QueueActions,
+            CommonAction, GlobalAction, QueueActions,
             actions::{AddKind, AutoplayKind, DeleteKind, RateKind, SaveKind},
         },
         theme::{
@@ -47,12 +45,8 @@ use crate::{
             info_list_modal::InfoListModal,
             input_modal::InputModal,
             menu::{
-                add_to_playlist_or_show_modal,
-                create_add_modal,
-                create_delete_modal,
-                create_rating_modal,
-                create_save_modal,
-                delete_from_playlist_or_show_confirmation,
+                add_to_playlist_or_show_modal, create_add_modal, create_delete_modal,
+                create_rating_modal, create_save_modal, delete_from_playlist_or_show_confirmation,
                 modal::MenuModal,
             },
             select_modal::SelectModal,
@@ -143,17 +137,40 @@ impl QueuePane {
 
         let modal = MenuModal::new(ctx)
             .list_section(ctx, |mut section| {
+                let song = selected_song.clone();
                 section.add_item("Play", move |ctx| {
-                    if let Some(id) = selected_song_id {
-                        ctx.command(move |client| {
-                            client.play_id(id)?;
-                            Ok(())
-                        });
+                    if let Some(song) = song {
+                        if !ctx.refresh_youtube_song_if_expired(&song, true) {
+                            let id = song.id;
+                            ctx.command(move |client| {
+                                client.play_id(id)?;
+                                Ok(())
+                            });
+                        }
                     }
                     Ok(())
                 });
+                let song = selected_song.clone();
                 section.add_item("Show info", move |ctx| {
-                    if let Some(song) = selected_song {
+                    if let Some(song) = song {
+                        if let Some(id) = song.youtube_id() {
+                            if let Some(yt) = ctx.youtube_manager.get_cached_metadata(&id) {
+                                let items = InfoListModal::builder()
+                                    .items(
+                                        crate::ui::modals::info_list_modal::KeyValues::from_youtube(
+                                            &yt,
+                                            Some(song.id),
+                                            ctx.song_position(song.id).map(|p| p as u32),
+                                            Some(song.file.clone()),
+                                        ),
+                                    )
+                                    .title("Song info")
+                                    .column_widths(&[30, 70])
+                                    .build();
+                                modal!(ctx, items);
+                                return Ok(());
+                            }
+                        }
                         modal!(
                             ctx,
                             InfoListModal::builder()
@@ -169,11 +186,12 @@ impl QueuePane {
             })
             .list_section(ctx, |mut section| {
                 let items = self.queue.items.iter().map(|song| song.file.clone()).collect_vec();
-                section.add_item("Add queue to playlist", |ctx| {
+                section.add_item("Add queue to playlist", move |ctx| {
                     let playlists = ctx.query_sync(move |client| {
                         Ok(client.list_playlists()?.into_iter().map(|p| p.name).collect_vec())
                     })?;
 
+                    let song_paths = items.clone();
                     modal!(
                         ctx,
                         SelectModal::builder()
@@ -182,10 +200,12 @@ impl QueuePane {
                             .confirm_label("Add")
                             .title("Select a playlist")
                             .on_confirm(move |ctx, selected, _idx| {
-                                ctx.command(move |client| {
-                                    client.add_to_playlist_multiple(&selected, items)?;
-                                    Ok(())
-                                });
+                                add_to_playlist_or_show_modal(
+                                    selected,
+                                    song_paths,
+                                    ctx.config.playlist_duplicate_strategy,
+                                    ctx,
+                                );
                                 Ok(())
                             })
                             .build()
@@ -221,6 +241,17 @@ impl QueuePane {
                                 client.delete_id(id)?;
                                 Ok(())
                             });
+                        }
+                        Ok(())
+                    })
+                    .item("Download", move |ctx| {
+                        if let Some(song) = selected_song.clone() {
+                            modal!(
+                                ctx,
+                                crate::ui::modals::menu::create_download_modal(&[song], ctx)
+                            );
+                        } else {
+                            status_info!("No song selected to download");
                         }
                         Ok(())
                     })
@@ -482,6 +513,16 @@ impl Pane for QueuePane {
             UiEvent::Reconnected => {
                 self.before_show(ctx)?;
             }
+            UiEvent::YouTube(crate::youtube::events::YouTubeEvent::AddManyToQueueResult {
+                added,
+                skipped,
+            }) => {
+                if *skipped > 0 {
+                    status_info!("Added {} tracks to queue, skipped {} duplicates", added, skipped);
+                } else {
+                    status_info!("Added {} tracks to queue", added);
+                }
+            }
             UiEvent::ConfigChanged => {
                 let (column_widths, column_formats) = Self::init(ctx);
                 self.column_formats = column_formats;
@@ -529,11 +570,27 @@ impl Pane for QueuePane {
                     .get_at_rendered_row(clicked_row)
                     .and_then(|idx| self.queue.items.get(idx))
                 {
-                    let id = song.id;
-                    ctx.command(move |client| {
-                        client.play_id(id)?;
-                        Ok(())
-                    });
+                    if song.is_youtube_expired() {
+                        let youtube_id = song.youtube_id().unwrap_or_default().to_string();
+                        let pos = ctx.song_position(song.id).map(|p| p as u32);
+                        let sender = ctx.youtube_manager.sender();
+                        smol::spawn(async move {
+                            let _ = sender
+                                .send(crate::youtube::events::YouTubeEvent::RefreshRequest {
+                                    youtube_id,
+                                    pos,
+                                    play_after_refresh: true,
+                                })
+                                .await;
+                        })
+                        .detach();
+                    } else {
+                        let id = song.id;
+                        ctx.command(move |client| {
+                            client.play_id(id)?;
+                            Ok(())
+                        });
+                    }
                 }
             }
             MouseEventKind::DoubleClick => {}
@@ -575,6 +632,7 @@ impl Pane for QueuePane {
             }
             MouseEventKind::RightClick => {}
             MouseEventKind::Drag { .. } => {}
+            MouseEventKind::Release => {}
         }
 
         Ok(())
@@ -597,20 +655,12 @@ impl Pane for QueuePane {
                         .confirm_label("Add")
                         .title("Select a playlist")
                         .on_confirm(move |ctx, selected, _idx| {
-                            let song_file = song_file.clone();
-                            ctx.command(move |client| {
-                                if song_file.starts_with('/') {
-                                    client.add_to_playlist(
-                                        &selected,
-                                        &format!("file://{song_file}"),
-                                        None,
-                                    )?;
-                                } else {
-                                    client.add_to_playlist(&selected, &song_file, None)?;
-                                }
-                                status_info!("Song added to playlist {}", selected);
-                                Ok(())
-                            });
+                            add_to_playlist_or_show_modal(
+                                selected,
+                                vec![song_file],
+                                ctx.config.playlist_duplicate_strategy,
+                                ctx,
+                            );
                             Ok(())
                         })
                         .build()
@@ -628,22 +678,12 @@ impl Pane for QueuePane {
                         .confirm_label("Add")
                         .title("Select a playlist")
                         .on_confirm(move |ctx, selected, _idx| {
-                            ctx.command(move |client| {
-                                let songs_len = song_files.len();
-                                for song_file in song_files {
-                                    if song_file.starts_with('/') {
-                                        client.add_to_playlist(
-                                            &selected,
-                                            &format!("file://{song_file}"),
-                                            None,
-                                        )?;
-                                    } else {
-                                        client.add_to_playlist(&selected, &song_file, None)?;
-                                    }
-                                }
-                                status_info!("{} songs added to playlist {}", songs_len, selected);
-                                Ok(())
-                            });
+                            add_to_playlist_or_show_modal(
+                                selected,
+                                song_files,
+                                ctx.config.playlist_duplicate_strategy,
+                                ctx,
+                            );
                             Ok(())
                         })
                         .build()
@@ -722,11 +762,28 @@ impl Pane for QueuePane {
                 }
                 QueueActions::Play => {
                     if let Some(selected_song) = self.queue.selected() {
-                        let id = selected_song.id;
-                        ctx.command(move |client| {
-                            client.play_id(id)?;
-                            Ok(())
-                        });
+                        if selected_song.is_youtube_expired() {
+                            let youtube_id =
+                                selected_song.youtube_id().unwrap_or_default().to_string();
+                            let pos = ctx.song_position(selected_song.id).map(|p| p as u32);
+                            let sender = ctx.youtube_manager.sender();
+                            smol::spawn(async move {
+                                let _ = sender
+                                    .send(crate::youtube::events::YouTubeEvent::RefreshRequest {
+                                        youtube_id,
+                                        pos,
+                                        play_after_refresh: true,
+                                    })
+                                    .await;
+                            })
+                            .detach();
+                        } else {
+                            let id = selected_song.id;
+                            ctx.command(move |client| {
+                                client.play_id(id)?;
+                                Ok(())
+                            });
+                        }
                     }
                 }
                 QueueActions::JumpToCurrent => {
@@ -1007,6 +1064,24 @@ impl Pane for QueuePane {
                 }
                 CommonAction::ShowInfo => {
                     if let Some(selected_song) = self.queue.selected() {
+                        if let Some(id) = selected_song.youtube_id() {
+                            if let Some(yt) = ctx.youtube_manager.get_cached_metadata(&id) {
+                                let items = InfoListModal::builder()
+                                    .items(
+                                        crate::ui::modals::info_list_modal::KeyValues::from_youtube(
+                                            &yt,
+                                            Some(selected_song.id),
+                                            ctx.song_position(selected_song.id).map(|p| p as u32),
+                                            Some(selected_song.file.clone()),
+                                        ),
+                                    )
+                                    .title("Song info")
+                                    .column_widths(&[30, 70])
+                                    .build();
+                                modal!(ctx, items);
+                                return Ok(());
+                            }
+                        }
                         modal!(
                             ctx,
                             InfoListModal::builder()

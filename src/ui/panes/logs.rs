@@ -26,6 +26,10 @@ pub struct LogsPane {
     logs_area: Rect,
     should_scroll_to_last: bool,
     scroll_enabled: bool,
+    selection_start: Option<usize>,
+    selection_end: Option<usize>,
+    is_selecting: bool,
+    unwrapped_lines: Vec<String>,
 }
 
 impl LogsPane {
@@ -36,6 +40,10 @@ impl LogsPane {
             scrolling_state: DirState::default(),
             logs_area: Rect::default(),
             should_scroll_to_last: false,
+            selection_start: None,
+            selection_end: None,
+            is_selecting: false,
+            unwrapped_lines: Vec::new(),
         }
     }
 }
@@ -72,6 +80,7 @@ impl Pane for LogsPane {
             })
             .collect();
 
+        self.unwrapped_lines = lines.iter().map(|l| l.to_string()).collect();
         let content_len = lines.len();
         self.scrolling_state.set_content_and_viewport_len(content_len, logs_area.height.into());
         if self.scroll_enabled
@@ -81,9 +90,29 @@ impl Pane for LogsPane {
             self.scrolling_state.last();
         }
 
-        let logs_wg = List::new(lines)
-            .style(config.as_text_style())
-            .highlight_style(config.theme.current_item_style);
+        let selection_range =
+            if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                let (s, e) = if start <= end { (start, end) } else { (end, start) };
+                Some(s..=e)
+            } else {
+                None
+            };
+
+        let items: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                let mut item = ratatui::widgets::ListItem::new(l.clone());
+                if let Some(ref range) = selection_range {
+                    if range.contains(&i) {
+                        item = item.style(config.theme.highlighted_item_style);
+                    }
+                }
+                item
+            })
+            .collect();
+
+        let logs_wg = List::new(items).style(config.as_text_style());
         if let Some(scrollbar) = config.as_styled_scrollbar() {
             frame.render_stateful_widget(
                 scrollbar,
@@ -119,6 +148,11 @@ impl Pane for LogsPane {
 
     fn handle_mouse_event(&mut self, event: MouseEvent, ctx: &Ctx) -> Result<()> {
         if !self.logs_area.contains(event.into()) {
+            if matches!(event.kind, MouseEventKind::LeftClick) {
+                self.selection_start = None;
+                self.selection_end = None;
+                ctx.render()?;
+            }
             return Ok(());
         }
 
@@ -132,6 +166,32 @@ impl Pane for LogsPane {
                 self.scrolling_state.scroll_down(ctx.config.scroll_amount, ctx.config.scrolloff);
 
                 ctx.render()?;
+            }
+            MouseEventKind::LeftClick => {
+                let clicked_row = (event.y - self.logs_area.y) as usize;
+                let offset = self.scrolling_state.as_render_state_ref().offset();
+                let selected_idx = offset + clicked_row;
+                if selected_idx < self.unwrapped_lines.len() {
+                    self.selection_start = Some(selected_idx);
+                    self.selection_end = Some(selected_idx);
+                    self.is_selecting = true;
+                    ctx.render()?;
+                } else {
+                    self.selection_start = None;
+                    self.selection_end = None;
+                    ctx.render()?;
+                }
+            }
+            MouseEventKind::Drag { .. } if self.is_selecting => {
+                let clicked_row = (event.y - self.logs_area.y) as usize;
+                let offset = self.scrolling_state.as_render_state_ref().offset();
+                let selected_idx = offset + clicked_row;
+                self.selection_end =
+                    Some(selected_idx.min(self.unwrapped_lines.len().saturating_sub(1)));
+                ctx.render()?;
+            }
+            MouseEventKind::Release => {
+                self.is_selecting = false;
             }
             _ => {}
         }
@@ -150,6 +210,46 @@ impl Pane for LogsPane {
                 }
                 LogsActions::ToggleScroll => {
                     self.scroll_enabled ^= true;
+                }
+                LogsActions::Copy => {
+                    if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+                        let (s, e) = if start <= end { (start, end) } else { (end, start) };
+                        let selected_text = self.unwrapped_lines[s..=e].join("\n");
+
+                        let child = std::process::Command::new("xclip")
+                            .args(["-selection", "clipboard"])
+                            .stdin(std::process::Stdio::piped())
+                            .spawn();
+
+                        match child {
+                            Ok(mut child) => {
+                                use std::io::Write;
+                                if let Some(mut stdin) = child.stdin.take() {
+                                    if let Err(err) = stdin.write_all(selected_text.as_bytes()) {
+                                        log::error!("Failed to write to xclip stdin: {err}");
+                                    }
+                                }
+                                let _ = child.wait();
+                                let _ = ctx.app_event_sender.send(
+                                    crate::shared::events::AppEvent::Status(
+                                        "Copied selection to clipboard".to_string(),
+                                        crate::shared::events::Level::Info,
+                                        std::time::Duration::from_secs(3),
+                                    ),
+                                );
+                            }
+                            Err(err) => {
+                                log::error!("Failed to spawn xclip: {err}");
+                                let _ = ctx.app_event_sender.send(
+                                    crate::shared::events::AppEvent::Status(
+                                        "Failed to copy: xclip not found?".to_string(),
+                                        crate::shared::events::Level::Error,
+                                        std::time::Duration::from_secs(3),
+                                    ),
+                                );
+                            }
+                        }
+                    }
                 }
             }
         } else if let Some(action) = event.claim_common() {

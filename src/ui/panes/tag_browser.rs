@@ -19,10 +19,7 @@ use crate::{
         mpd_client::{Filter, FilterKind, MpdClient, Tag},
     },
     shared::{
-        cmp::StringCompare,
-        keys::ActionEvent,
-        mouse_event::MouseEvent,
-        string_util::StringExt,
+        cmp::StringCompare, keys::ActionEvent, mouse_event::MouseEvent, string_util::StringExt,
     },
     ui::{
         UiEvent,
@@ -43,18 +40,14 @@ pub struct TagBrowserPane {
     target_pane: PaneType,
     browser: Browser<DirOrSong>,
     initialized: bool,
+    youtube_manager: std::sync::Arc<crate::youtube::manager::YouTubeManager>,
 }
 
 const INIT: &str = "init";
 const FETCH_SONGS: &str = "fetch_songs";
 
 impl TagBrowserPane {
-    pub fn new(
-        root_tag: Tag,
-        target_pane: PaneType,
-        separator: Option<String>,
-        _ctx: &Ctx,
-    ) -> Self {
+    pub fn new(root_tag: Tag, target_pane: PaneType, separator: Option<String>, ctx: &Ctx) -> Self {
         Self {
             root_tag,
             target_pane,
@@ -63,6 +56,7 @@ impl TagBrowserPane {
             stack: DirStack::default(),
             browser: Browser::new(),
             initialized: false,
+            youtube_manager: std::sync::Arc::clone(&ctx.youtube_manager),
         }
     }
 
@@ -174,9 +168,16 @@ impl Pane for TagBrowserPane {
         if !self.initialized {
             let root_tag = self.root_tag.clone();
             let target = self.target_pane.clone();
+            let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
             ctx.query().id(INIT).replace_id(INIT).target(target).query(move |client| {
-                let result = client.list_tag(root_tag, None).context("Cannot list artists")?;
-                Ok(MpdQueryResult::LsInfo { data: result.0, path: None })
+                let mut result =
+                    client.list_tag(root_tag.clone(), None).context("Cannot list artists")?.0;
+                if matches!(root_tag, Tag::Artist | Tag::AlbumArtist) {
+                    if let Ok(yt_artists) = youtube_manager.db.lock().list_artists() {
+                        result.extend(yt_artists);
+                    }
+                }
+                Ok(MpdQueryResult::LsInfo { data: result, path: None })
             });
 
             self.initialized = true;
@@ -190,10 +191,17 @@ impl Pane for TagBrowserPane {
             UiEvent::Database => {
                 let root_tag = self.root_tag.clone();
                 let target = self.target_pane.clone();
+                let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
                 self.stack = DirStack::default();
                 ctx.query().id(INIT).replace_id(INIT).target(target).query(move |client| {
-                    let result = client.list_tag(root_tag, None).context("Cannot list artists")?;
-                    Ok(MpdQueryResult::LsInfo { data: result.0, path: None })
+                    let mut result =
+                        client.list_tag(root_tag.clone(), None).context("Cannot list artists")?.0;
+                    if matches!(root_tag, Tag::Artist | Tag::AlbumArtist) {
+                        if let Ok(yt_artists) = youtube_manager.db.lock().list_artists() {
+                            result.extend(yt_artists);
+                        }
+                    }
+                    Ok(MpdQueryResult::LsInfo { data: result, path: None })
                 });
             }
             UiEvent::Reconnected => {
@@ -249,6 +257,7 @@ impl Pane for TagBrowserPane {
                         .collect_vec()
                 } else {
                     data.into_iter()
+                        .unique()
                         .sorted_by(|a, b| StringCompare::from(sort_opts).compare(a, b))
                         .map(DirOrSong::name_only)
                         .collect_vec()
@@ -286,6 +295,7 @@ impl BrowserPane<DirOrSong> for TagBrowserPane {
         let root_tag = self.root_tag.clone();
         let separator = self.separator.clone();
         let path = self.stack().path().to_owned();
+        let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
 
         let album_songs = match self.stack.path().as_slice() {
             [_artist] => self
@@ -305,18 +315,29 @@ impl BrowserPane<DirOrSong> for TagBrowserPane {
         };
 
         move |client| {
-            Ok(match item {
+            let songs = match item {
                 DirOrSong::Dir { name, .. } => match path.as_slice() {
                     [_artist] => album_songs,
-                    [] => client.find(&[Self::root_tag_filter(
-                        root_tag,
-                        separator.as_deref(),
-                        &name,
-                    )])?,
+                    [] => {
+                        let mut songs = client.find(&[Self::root_tag_filter(
+                            root_tag.clone(),
+                            separator.as_deref(),
+                            &name,
+                        )])?;
+                        if matches!(root_tag, Tag::Artist | Tag::AlbumArtist) {
+                            if let Ok(yt_tracks) =
+                                youtube_manager.db.lock().list_tracks_by_artist(&name)
+                            {
+                                songs.extend(yt_tracks.into_iter().map(Song::from));
+                            }
+                        }
+                        songs
+                    }
                     _ => Vec::new(),
                 },
                 DirOrSong::Song(song) => vec![song.clone()],
-            })
+            };
+            Ok(songs)
         }
     }
 
@@ -334,13 +355,26 @@ impl BrowserPane<DirOrSong> for TagBrowserPane {
                 let separator = self.separator.clone();
                 let target = self.target_pane.clone();
                 let current = current.to_owned();
+                let youtube_manager = std::sync::Arc::clone(&self.youtube_manager);
 
                 ctx.query().id(FETCH_SONGS).replace_id(FETCH_SONGS).target(target).query(
                     move |client| {
                         let separator = separator.map(|v| v.as_ref().to_owned());
                         let separator = separator.as_deref();
-                        let all_songs: Vec<Song> =
-                            client.find(&[Self::root_tag_filter(root_tag, separator, &current)])?;
+                        let mut all_songs: Vec<Song> = client.find(&[Self::root_tag_filter(
+                            root_tag.clone(),
+                            separator,
+                            &current,
+                        )])?;
+
+                        if matches!(root_tag, Tag::Artist | Tag::AlbumArtist) {
+                            if let Ok(yt_tracks) =
+                                youtube_manager.db.lock().list_tracks_by_artist(&current)
+                            {
+                                all_songs.extend(yt_tracks.into_iter().map(Song::from));
+                            }
+                        }
+
                         Ok(MpdQueryResult::SongsList {
                             data: all_songs,
                             path: Some(current.into()),
@@ -428,12 +462,15 @@ mod tests {
 
         pane.process_songs(artist.clone(), songs, &ctx);
 
-        assert_eq!(pane.stack.contained_paths().sorted().collect_vec(), vec![
-            &Path::from([]),
-            &Path::from("artist"),
-            &Path::from(["artist", "album_a"]),
-            &Path::from(["artist", "album_b"]),
-        ]);
+        assert_eq!(
+            pane.stack.contained_paths().sorted().collect_vec(),
+            vec![
+                &Path::from([]),
+                &Path::from("artist"),
+                &Path::from(["artist", "album_a"]),
+                &Path::from(["artist", "album_b"]),
+            ]
+        );
         assert_eq!(pane_albums(&pane), vec!["album_a", "album_b"]);
     }
 
@@ -453,13 +490,16 @@ mod tests {
 
         pane.process_songs(artist.clone(), songs, &ctx);
 
-        assert_eq!(pane.stack.contained_paths().sorted().collect_vec(), vec![
-            &Path::from([]),
-            &Path::from("artist"),
-            &Path::from(["artist", "(2020) album_a"]),
-            &Path::from(["artist", "(2021) album_a"]),
-            &Path::from(["artist", "(2022) album_b"]),
-        ]);
+        assert_eq!(
+            pane.stack.contained_paths().sorted().collect_vec(),
+            vec![
+                &Path::from([]),
+                &Path::from("artist"),
+                &Path::from(["artist", "(2020) album_a"]),
+                &Path::from(["artist", "(2021) album_a"]),
+                &Path::from(["artist", "(2022) album_b"]),
+            ]
+        );
         assert_eq!(pane_albums(&pane), vec!["(2020) album_a", "(2021) album_a", "(2022) album_b"]);
     }
 
@@ -479,13 +519,16 @@ mod tests {
 
         pane.process_songs(artist.clone(), songs, &ctx);
 
-        assert_eq!(pane.stack.contained_paths().sorted().collect_vec(), vec![
-            &Path::from([]),
-            &Path::from("artist"),
-            &Path::from(["artist", "(2019) album_b"]),
-            &Path::from(["artist", "(2020) album_a"]),
-            &Path::from(["artist", "(2021) album_a"]),
-        ]);
+        assert_eq!(
+            pane.stack.contained_paths().sorted().collect_vec(),
+            vec![
+                &Path::from([]),
+                &Path::from("artist"),
+                &Path::from(["artist", "(2019) album_b"]),
+                &Path::from(["artist", "(2020) album_a"]),
+                &Path::from(["artist", "(2021) album_a"]),
+            ]
+        );
         assert_eq!(pane_albums(&pane), vec!["(2019) album_b", "(2020) album_a", "(2021) album_a"]);
     }
 
@@ -505,12 +548,15 @@ mod tests {
 
         pane.process_songs(artist.clone(), songs, &ctx);
 
-        assert_eq!(pane.stack.contained_paths().sorted().collect_vec(), vec![
-            &Path::from([]),
-            &Path::from("artist"),
-            &Path::from(["artist", "album_a"]),
-            &Path::from(["artist", "album_b"]),
-        ]);
+        assert_eq!(
+            pane.stack.contained_paths().sorted().collect_vec(),
+            vec![
+                &Path::from([]),
+                &Path::from("artist"),
+                &Path::from(["artist", "album_a"]),
+                &Path::from(["artist", "album_b"]),
+            ]
+        );
         assert_eq!(pane_albums(&pane), vec!["album_b", "album_a"]);
     }
 
@@ -531,12 +577,15 @@ mod tests {
 
         pane.process_songs(artist.clone(), songs, &ctx);
 
-        assert_eq!(pane.stack.contained_paths().sorted().collect_vec(), vec![
-            &Path::from([]),
-            &Path::from("artist"),
-            &Path::from(["artist", "(1969) album_a"]), // Uses originaldate, not date
-            &Path::from(["artist", "(1970) album_b"]), // Uses originaldate, not date
-        ]);
+        assert_eq!(
+            pane.stack.contained_paths().sorted().collect_vec(),
+            vec![
+                &Path::from([]),
+                &Path::from("artist"),
+                &Path::from(["artist", "(1969) album_a"]), // Uses originaldate, not date
+                &Path::from(["artist", "(1970) album_b"]), // Uses originaldate, not date
+            ]
+        );
         assert_eq!(pane_albums(&pane), vec!["(1969) album_a", "(1970) album_b"]);
     }
 
@@ -555,12 +604,15 @@ mod tests {
 
         pane.process_songs(artist.clone(), songs, &ctx);
 
-        assert_eq!(pane.stack.contained_paths().sorted().collect_vec(), vec![
-            &Path::from([]),
-            &Path::from("artist"),
-            &Path::from(["artist", "(1969) album_a"]), // Uses originaldate (first in list)
-            &Path::from(["artist", "(1990) album_b"]), // Falls back to date (second in list)
-        ]);
+        assert_eq!(
+            pane.stack.contained_paths().sorted().collect_vec(),
+            vec![
+                &Path::from([]),
+                &Path::from("artist"),
+                &Path::from(["artist", "(1969) album_a"]), // Uses originaldate (first in list)
+                &Path::from(["artist", "(1990) album_b"]), // Falls back to date (second in list)
+            ]
+        );
         assert_eq!(pane_albums(&pane), vec!["(1969) album_a", "(1990) album_b"]);
     }
 
@@ -578,11 +630,14 @@ mod tests {
 
         pane.process_songs(artist.clone(), songs, &ctx);
 
-        assert_eq!(pane.stack.contained_paths().sorted().collect_vec(), vec![
-            &Path::from([]),
-            &Path::from("artist"),
-            &Path::from(["artist", "(<no date>) album_a"]) // Falls back to default
-        ]);
+        assert_eq!(
+            pane.stack.contained_paths().sorted().collect_vec(),
+            vec![
+                &Path::from([]),
+                &Path::from("artist"),
+                &Path::from(["artist", "(<no date>) album_a"]) // Falls back to default
+            ]
+        );
         assert_eq!(pane_albums(&pane), vec!["(<no date>) album_a"]);
     }
 }

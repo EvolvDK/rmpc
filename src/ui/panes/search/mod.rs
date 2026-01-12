@@ -15,8 +15,7 @@ use crate::{
     MpdQueryResult,
     config::{
         keys::{
-            CommonAction,
-            GlobalAction,
+            CommonAction, GlobalAction,
             actions::{AddKind, AutoplayKind, DeleteKind, Position, RateKind, SaveKind},
         },
         tabs::PaneType,
@@ -43,12 +42,8 @@ use crate::{
         modals::{
             input_modal::InputModal,
             menu::{
-                add_to_playlist_or_show_modal,
-                create_add_modal,
-                create_delete_modal,
-                create_rating_modal,
-                create_save_modal,
-                delete_from_playlist_or_show_confirmation,
+                add_to_playlist_or_show_modal, create_add_modal, create_delete_modal,
+                create_rating_modal, create_save_modal, delete_from_playlist_or_show_confirmation,
                 modal::MenuModal,
             },
             select_modal::SelectModal,
@@ -184,10 +179,12 @@ impl SearchPane {
 
     fn search(&mut self, ctx: &Ctx) {
         let search_mode = self.inputs.search_mode();
+        let mut query_val = String::new();
         let filter = self.inputs.inputs.iter().filter_map(|input| match &input {
             InputType::Textbox(TextboxInput { buffer_id, filter_key: Some(key), .. }) => {
                 let value = ctx.input.value(*buffer_id).trim().to_owned();
                 if !value.is_empty() && !key.is_empty() {
+                    query_val.clone_from(&value);
                     Some((key.to_owned(), value, search_mode))
                 } else {
                     None
@@ -212,6 +209,8 @@ impl SearchPane {
         };
 
         let mut filter = filter.collect_vec();
+        let filter_props = ctx.config.theme.browser_song_format.0.clone();
+        let youtube_manager = ctx.youtube_manager.clone();
 
         if filter.is_empty()
             && stickers_supported
@@ -272,7 +271,18 @@ impl SearchPane {
             // current results
             let _ = std::mem::take(&mut self.songs_dir);
         } else {
-            // Search normally
+            // Include YouTube library tracks
+            // TODO: Unify this logic with TagBrowserPane or unify fetching from MPD and YT.
+            let mut yt_songs = Vec::new();
+            if let Ok(yt_tracks) = youtube_manager.list_library_tracks() {
+                for track in yt_tracks {
+                    let song = Song::from(track);
+                    if song.matches(filter_props.as_slice(), &query_val, ctx) {
+                        yt_songs.push(song);
+                    }
+                }
+            }
+
             ctx.query().id(SEARCH).replace_id(SEARCH).target(PaneType::Search).query(
                 move |client| {
                     let filter = filter
@@ -282,29 +292,27 @@ impl SearchPane {
                         })
                         .collect_vec();
 
-                    let data = if fold_case {
+                    let mut data = if fold_case {
                         client.search(&filter, strip_diacritics)
                     } else {
                         client.find(&filter)
                     }?;
 
-                    let data = if stickers_supported && rating_filter.is_some() {
+                    if stickers_supported && rating_filter.is_some() {
                         // empty URI returns all songs with the sticker
                         let ratings = client.find_stickers("", RATING_STICKER, rating_filter)?;
                         let ratings: HashSet<_> = ratings.into_iter().map(|r| r.file).collect();
-                        data.into_iter().filter(|song| ratings.contains(&song.file)).collect()
-                    } else {
-                        data
-                    };
+                        data.retain(|song| ratings.contains(&song.file));
+                    }
 
-                    let data = if stickers_supported && liked_filter.is_some() {
+                    if stickers_supported && liked_filter.is_some() {
                         // empty URI returns all songs with the sticker
                         let liked = client.find_stickers("", LIKE_STICKER, liked_filter)?;
                         let liked: HashSet<_> = liked.into_iter().map(|r| r.file).collect();
-                        data.into_iter().filter(|song| liked.contains(&song.file)).collect()
-                    } else {
-                        data
-                    };
+                        data.retain(|song| liked.contains(&song.file));
+                    }
+
+                    data.extend(yt_songs);
 
                     Ok(MpdQueryResult::SearchResult { data })
                 },
@@ -834,11 +842,12 @@ impl SearchPane {
                                     .confirm_label("Add")
                                     .title("Select a playlist")
                                     .on_confirm(move |ctx, selected, _idx| {
-                                        ctx.command(move |client| {
-                                            client
-                                                .add_to_playlist_multiple(&selected, song_files)?;
-                                            Ok(())
-                                        });
+                                        add_to_playlist_or_show_modal(
+                                            selected,
+                                            song_files,
+                                            ctx.config.playlist_duplicate_strategy,
+                                            ctx,
+                                        );
                                         Ok(())
                                     })
                                     .build()
@@ -870,11 +879,13 @@ impl SearchPane {
                     Ok(())
                 });
 
-                let song_files = self.items(false).map(|(_, item)| item.file.clone()).collect();
+                let song_files: Vec<String> =
+                    self.items(false).map(|(_, item)| item.file.clone()).collect();
                 section.add_item("Add to playlist", move |ctx| {
                     let playlists = ctx.query_sync(move |client| {
                         Ok(client.list_playlists()?.into_iter().map(|p| p.name).collect_vec())
                     })?;
+                    let song_files = song_files.clone();
                     modal!(
                         ctx,
                         SelectModal::builder()
@@ -883,10 +894,12 @@ impl SearchPane {
                             .confirm_label("Add")
                             .title("Select a playlist")
                             .on_confirm(move |ctx, selected, _idx| {
-                                ctx.command(move |client| {
-                                    client.add_to_playlist_multiple(&selected, song_files)?;
-                                    Ok(())
-                                });
+                                add_to_playlist_or_show_modal(
+                                    selected,
+                                    song_files,
+                                    ctx.config.playlist_duplicate_strategy,
+                                    ctx,
+                                );
                                 Ok(())
                             })
                             .build()
@@ -1229,6 +1242,7 @@ impl Pane for SearchPane {
                 // drag events are handled by scrollbar interaction, no
                 // additional action needed
             }
+            MouseEventKind::Release => {}
             _ => {}
         }
 

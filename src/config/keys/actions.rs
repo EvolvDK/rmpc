@@ -288,6 +288,7 @@ impl From<DirectoriesActionsFile> for DirectoriesActions {
 pub enum LogsActionsFile {
     Clear,
     ToggleScroll,
+    Copy,
 }
 
 #[cfg(debug_assertions)]
@@ -296,6 +297,7 @@ pub enum LogsActionsFile {
 pub enum LogsActions {
     Clear,
     ToggleScroll,
+    Copy,
 }
 
 #[cfg(debug_assertions)]
@@ -304,6 +306,7 @@ impl From<LogsActionsFile> for LogsActions {
         match value {
             LogsActionsFile::Clear => LogsActions::Clear,
             LogsActionsFile::ToggleScroll => LogsActions::ToggleScroll,
+            LogsActionsFile::Copy => LogsActions::Copy,
         }
     }
 }
@@ -314,6 +317,7 @@ impl ToDescription for LogsActions {
         match self {
             LogsActions::Clear => "Clear logs",
             LogsActions::ToggleScroll => "Toggle automatic scrolling when log gets added",
+            LogsActions::Copy => "Copy selected logs to clipboard",
         }
         .into()
     }
@@ -438,31 +442,38 @@ impl std::fmt::Display for AddKind {
 impl Default for AddKind {
     fn default() -> Self {
         AddKind::Modal(vec![
-            ("At the end of queue".into(), AddOpts {
-                autoplay: AutoplayKind::None,
-                position: Position::EndOfQueue,
-                all: false,
-            }),
-            ("At the start of queue".into(), AddOpts {
-                autoplay: AutoplayKind::None,
-                position: Position::StartOfQueue,
-                all: false,
-            }),
-            ("After the current song".into(), AddOpts {
-                autoplay: AutoplayKind::None,
-                position: Position::AfterCurrentSong,
-                all: false,
-            }),
-            ("Replace the queue".into(), AddOpts {
-                autoplay: AutoplayKind::None,
-                position: Position::Replace,
-                all: false,
-            }),
-            ("Replace the queue and play".into(), AddOpts {
-                autoplay: AutoplayKind::First,
-                position: Position::Replace,
-                all: false,
-            }),
+            (
+                "At the end of queue".into(),
+                AddOpts {
+                    autoplay: AutoplayKind::None,
+                    position: Position::EndOfQueue,
+                    all: false,
+                },
+            ),
+            (
+                "At the start of queue".into(),
+                AddOpts {
+                    autoplay: AutoplayKind::None,
+                    position: Position::StartOfQueue,
+                    all: false,
+                },
+            ),
+            (
+                "After the current song".into(),
+                AddOpts {
+                    autoplay: AutoplayKind::None,
+                    position: Position::AfterCurrentSong,
+                    all: false,
+                },
+            ),
+            (
+                "Replace the queue".into(),
+                AddOpts { autoplay: AutoplayKind::None, position: Position::Replace, all: false },
+            ),
+            (
+                "Replace the queue and play".into(),
+                AddOpts { autoplay: AutoplayKind::First, position: Position::Replace, all: false },
+            ),
         ])
     }
 }
@@ -1177,5 +1188,43 @@ impl ToDescription for SearchActions {
 impl From<SearchActionsFile> for SearchActions {
     fn from(_value: SearchActionsFile) -> Self {
         unreachable!()
+    }
+}
+
+// Youtube actions
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub enum YoutubeActionsFile {
+    CycleFilterMode {
+        #[serde(default = "crate::config::defaults::bool::<true>")]
+        forward: bool,
+    },
+}
+
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq)]
+pub enum YoutubeActions {
+    CycleFilterMode { forward: bool },
+}
+
+impl From<YoutubeActionsFile> for YoutubeActions {
+    fn from(value: YoutubeActionsFile) -> Self {
+        match value {
+            YoutubeActionsFile::CycleFilterMode { forward } => {
+                YoutubeActions::CycleFilterMode { forward }
+            }
+        }
+    }
+}
+
+impl ToDescription for YoutubeActions {
+    fn to_description(&self) -> Cow<'static, str> {
+        match self {
+            YoutubeActions::CycleFilterMode { forward: true } => {
+                "Cycle YouTube filter mode forward".into()
+            }
+            YoutubeActions::CycleFilterMode { forward: false } => {
+                "Cycle YouTube filter mode backward".into()
+            }
+        }
     }
 }

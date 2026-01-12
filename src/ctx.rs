@@ -11,11 +11,7 @@ use bon::bon;
 use crossbeam::channel::{SendError, Sender, bounded};
 
 use crate::{
-    AppEvent,
-    MpdCommand,
-    MpdQuery,
-    MpdQueryResult,
-    WorkRequest,
+    AppEvent, MpdCommand, MpdQuery, MpdQueryResult, WorkRequest,
     config::{
         Config,
         album_art::ImageMethod,
@@ -78,6 +74,7 @@ pub struct Ctx {
     pub(crate) input: InputManager,
     pub(crate) key_resolver: KeyResolver,
     pub(crate) ytdlp_manager: YtDlpManager,
+    pub(crate) youtube_manager: std::sync::Arc<crate::youtube::manager::YouTubeManager>,
     pub(crate) cached_queue_time_total: Duration,
 }
 
@@ -90,7 +87,19 @@ impl Ctx {
         work_sender: Sender<WorkRequest>,
         client_request_sender: Sender<ClientRequest>,
         mut scheduler: Scheduler<(Sender<AppEvent>, Sender<ClientRequest>), DefaultTimeProvider>,
+        db_path: &std::path::Path,
     ) -> Result<Self> {
+        let address = client.addr.clone();
+        let password = client.password.clone();
+        let youtube_manager = crate::youtube::manager::YouTubeManager::new(
+            db_path,
+            config.cache_dir.clone(),
+            config.lyrics_dir.clone(),
+            config.lyrics_sub_langs.clone(),
+            address,
+            password,
+        )?;
+
         let supported_commands: HashSet<String> = client.supported_commands.clone();
         let stickers_supported = if supported_commands.contains("sticker") {
             StickersSupport::Supported
@@ -100,7 +109,8 @@ impl Ctx {
         log::info!(supported_commands:? = supported_commands; "Supported commands by server");
 
         let status = client.get_status()?;
-        let queue = client.playlist_info()?.unwrap_or_default();
+        let mut queue = client.playlist_info()?.unwrap_or_default();
+        youtube_manager.enrich_songs(&mut queue);
         let cached_queue_time_total = queue.iter().filter_map(|s| s.duration).sum();
 
         if !supported_commands.contains("albumart") || !supported_commands.contains("readpicture") {
@@ -138,6 +148,7 @@ impl Ctx {
             stickers_supported,
             input: InputManager::default(),
             key_resolver,
+            youtube_manager: std::sync::Arc::new(youtube_manager),
             cached_queue_time_total,
         })
     }
@@ -263,6 +274,70 @@ impl Ctx {
         }
     }
 
+    pub fn update_queue(&mut self, mut queue: Vec<Song>) {
+        self.youtube_manager.enrich_songs(&mut queue);
+        self.cached_queue_time_total = queue.iter().filter_map(|s| s.duration).sum();
+        self.queue = queue;
+    }
+
+    pub fn song_position(&self, song_id: u32) -> Option<usize> {
+        self.queue.iter().position(|s| s.id == song_id)
+    }
+
+    pub(crate) fn find_failed_song_in_queue(&self, error_msg: &str) -> Option<&Song> {
+        // Score each song by relevance to error
+        self.queue
+            .iter()
+            .filter(|s| s.youtube_id().is_some())
+            .max_by_key(|song| self.relevance_score(song, error_msg))
+    }
+
+    pub fn refresh_youtube_song_if_expired(&self, song: &Song, play_after_refresh: bool) -> bool {
+        if let Some(yt_id) = song.youtube_id()
+            && song.is_youtube_expired()
+        {
+            let sender = self.youtube_manager.sender();
+            let yt_id = yt_id.to_string();
+            let pos = self.song_position(song.id).map(|p| p as u32);
+            smol::spawn(async move {
+                let _ = sender
+                    .send(crate::youtube::events::YouTubeEvent::RefreshRequest {
+                        youtube_id: yt_id,
+                        pos,
+                        play_after_refresh,
+                    })
+                    .await;
+            })
+            .detach();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn relevance_score(&self, song: &Song, error: &str) -> u32 {
+        let mut score = 0;
+
+        // Exact ID match = highest priority
+        if let Some(id) = song.youtube_id() {
+            if error.contains(id.as_str()) {
+                score += 1000;
+            }
+        }
+
+        // URL prefix match
+        if error.contains(&song.file[..50.min(song.file.len())]) {
+            score += 100;
+        }
+
+        // Currently playing = tiebreaker
+        if self.status.songid == Some(song.id) {
+            score += 10;
+        }
+
+        score
+    }
+
     pub(crate) fn find_current_lyrics_path(&self) -> Option<PathBuf> {
         let (_, song) = self.find_current_song_in_queue()?;
         let lyrics_dir = self.config.lyrics_dir.as_ref()?;
@@ -271,9 +346,9 @@ impl Ctx {
             .filter(|p| p.is_file())
             .or_else(|| self.lrc_index.find_entry(song).map(|(path, _)| path.to_path_buf()));
 
-        let artist = song.metadata.get("artist").map(|v| v.last())?;
-        let title = song.metadata.get("title").map(|v| v.last())?;
-        let album = song.metadata.get("album").map(|v| v.last());
+        let artist = song.metadata.get(Song::ARTIST).map(|v| v.last())?;
+        let title = song.metadata.get(Song::TITLE).map(|v| v.last())?;
+        let album = song.metadata.get(Song::ALBUM).map(|v| v.last());
         match &path {
             Some(path) => log::debug!(artist, title, album; "Lyrics found at {}", path.display()),
             None => log::debug!(artist, title, album; "No lyrics found"),

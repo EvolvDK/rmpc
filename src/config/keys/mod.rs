@@ -2,6 +2,11 @@ use std::{borrow::Cow, collections::HashMap};
 
 #[cfg(debug_assertions)]
 pub use actions::LogsActions;
+pub use actions::{
+    AlbumsActions, ArtistsActions, CommonAction, DirectoriesActions, GlobalAction, QueueActions,
+    SearchActions, YoutubeActions,
+};
+
 #[cfg(debug_assertions)]
 use actions::LogsActionsFile;
 pub use actions::{
@@ -12,8 +17,10 @@ pub use actions::{
     GlobalAction,
     QueueActions,
     SearchActions,
+    YoutubeActions,
 };
-use actions::{CommonActionFile, GlobalActionFile, QueueActionsFile};
+use actions::{CommonActionFile, GlobalActionFile, QueueActionsFile, YoutubeActionsFile};
+use crossterm::event::{KeyCode, KeyModifiers};
 pub use key::Key;
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +44,7 @@ pub struct KeyConfig {
     #[cfg(debug_assertions)]
     pub logs: HashMap<KeySequence, LogsActions>,
     pub queue: HashMap<KeySequence, QueueActions>,
+    pub youtube: HashMap<KeySequence, YoutubeActions>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -52,6 +60,8 @@ pub struct KeyConfigFile {
     pub logs: HashMap<KeySequence, LogsActionsFile>,
     #[serde(default)]
     pub queue: HashMap<KeySequence, QueueActionsFile>,
+    #[serde(default)]
+    pub youtube: HashMap<KeySequence, YoutubeActionsFile>,
 }
 
 impl Default for KeyConfigFile {
@@ -63,6 +73,7 @@ impl Default for KeyConfigFile {
         #[cfg(debug_assertions)]
         use LogsActionsFile as L;
         use QueueActionsFile as Q;
+        use YoutubeActionsFile as Y;
 
         let s = || KeySequence::new();
 
@@ -158,17 +169,22 @@ impl Default for KeyConfigFile {
             (s().char('X'),                       Q::Shuffle),
         ]);
 
+        let youtube = HashMap::from([
+            (s().char('f').ctrl(),                Y::CycleFilterMode { forward: true }),
+            (s().char('f').ctrl().alt(),          Y::CycleFilterMode { forward: false }),
+        ]);
+
         #[cfg(debug_assertions)]
-        let logs = HashMap::from([
+            let logs = HashMap::from([
             (s().char('D'),                       L::Clear),
-            (s().char('S'),                       L::ToggleScroll),
+	        (s().char('S'),                       L::ToggleScroll),
         ]);
 
         #[cfg(not(debug_assertions))]
-        return KeyConfigFile { clear: false, global, navigation, queue };
+        return KeyConfigFile { clear: false, global, navigation, queue, youtube };
 
         #[cfg(debug_assertions)]
-        return KeyConfigFile { clear: false, global, navigation, queue, logs };
+        return KeyConfigFile { clear: false, global, navigation, queue, logs, youtube };
     }
 }
 
@@ -203,6 +219,7 @@ impl TryFrom<KeyConfigFile> for KeyConfig {
                     .into_iter()
                     .map(|(k, v)| -> anyhow::Result<_> { Ok((k, v.try_into()?)) })
                     .collect::<anyhow::Result<_>>()?,
+                youtube: value.youtube.into_iter().map(|(k, v)| (k, v.into())).collect(),
             })
         } else {
             let global: HashMap<KeySequence, GlobalAction> =
@@ -217,19 +234,23 @@ impl TryFrom<KeyConfigFile> for KeyConfig {
                 .into_iter()
                 .map(|(k, v)| -> anyhow::Result<_> { Ok((k, v.try_into()?)) })
                 .collect::<anyhow::Result<_>>()?;
+            let youtube: HashMap<KeySequence, YoutubeActions> =
+                value.youtube.into_iter().map(|(k, v)| (k, v.into())).collect();
             #[cfg(debug_assertions)]
             let logs: HashMap<KeySequence, LogsActions> =
                 value.logs.into_iter().map(|(k, v)| (k, v.into())).collect();
 
             let mut result = KeyConfig::default();
 
-            let all_key_overrides = global.keys().chain(navigation.keys()).chain(queue.keys());
+            let all_key_overrides =
+                global.keys().chain(navigation.keys()).chain(queue.keys()).chain(youtube.keys());
             #[cfg(debug_assertions)]
             let all_key_overrides = all_key_overrides.chain(logs.keys());
             for key in all_key_overrides {
                 result.global.remove(key);
                 result.navigation.remove(key);
                 result.queue.remove(key);
+                result.youtube.remove(key);
                 #[cfg(debug_assertions)]
                 result.logs.remove(key);
             }
@@ -244,6 +265,10 @@ impl TryFrom<KeyConfigFile> for KeyConfig {
 
             for (k, v) in queue {
                 result.queue.insert(k, v);
+            }
+
+            for (k, v) in youtube {
+                result.youtube.insert(k, v);
             }
 
             #[cfg(debug_assertions)]
@@ -273,9 +298,7 @@ mod tests {
     #[cfg(debug_assertions)]
     use crate::config::keys::LogsActionsFile;
     use crate::config::keys::{
-        CommonAction,
-        GlobalAction,
-        QueueActions,
+        CommonAction, GlobalAction, QueueActions,
         actions::{CommonActionFile, GlobalActionFile, QueueActionsFile},
     };
 
@@ -293,7 +316,8 @@ mod tests {
             navigation: HashMap::from([
                 (Key { key: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL, }.into(), CommonActionFile::Up),
                 (Key { key: KeyCode::Char('b'), modifiers: KeyModifiers::SHIFT }.into(), CommonActionFile::Up)
-            ])
+            ]),
+            youtube: HashMap::new(),
         };
         let expected = KeyConfig {
             global: HashMap::from([(Key { key: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL, }.into(), GlobalAction::Quit)]),
@@ -307,6 +331,7 @@ mod tests {
             search: HashMap::from([]),
             navigation: HashMap::from([(Key { key: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL }.into(), CommonAction::Up),
                                        (Key { key: KeyCode::Char('b'), modifiers: KeyModifiers::SHIFT }.into(), CommonAction::Up)]),
+            youtube: HashMap::new(),
         };
 
         let result: KeyConfig = input.try_into().unwrap();
@@ -332,6 +357,7 @@ mod tests {
             ]),
             #[cfg(debug_assertions)]
             logs: HashMap::from([(Key { key: KeyCode::Char('a'), modifiers: KeyModifiers::CONTROL, }.into(), LogsActionsFile::Clear)]),
+            youtube: HashMap::new(),
         };
 
         let mut default: KeyConfig = KeyConfig::default();

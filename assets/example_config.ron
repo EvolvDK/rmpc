@@ -121,6 +121,10 @@
             "C":          JumpToCurrent,
             "X":          Shuffle,
         },
+        youtube: {
+            "<C-f>":   CycleFilterMode(forward: true),
+            "<C-A-f>": CycleFilterMode(forward: false),
+        },
     ),
     search: (
         case_sensitive: false,
@@ -276,6 +280,10 @@
                 direction: Vertical,
                 panes: [(pane: Pane(Search), size: "100%", borders: "ALL", border_symbols: Rounded)],
             )
+        ),
+        (
+            name: "YouTube",
+            pane: Pane(Youtube),
         ),
     ],
 )

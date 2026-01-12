@@ -13,10 +13,7 @@ use anyhow::Result;
 use log::debug;
 
 use super::{
-    commands::mpd_config::MpdConfig,
-    errors::MpdError,
-    proto_client::SocketClient,
-    version::Version,
+    commands::mpd_config::MpdConfig, errors::MpdError, proto_client::SocketClient, version::Version,
 };
 use crate::{
     config::{MpdAddress, address::MpdPassword},
@@ -35,8 +32,8 @@ pub struct Client<'name> {
     name: &'name str,
     rx: BufReader<TcpOrUnixStream>,
     pub stream: TcpOrUnixStream,
-    addr: MpdAddress,
-    password: Option<MpdPassword>,
+    pub addr: MpdAddress,
+    pub password: Option<MpdPassword>,
     pub version: Version,
     pub config: Option<MpdConfig>,
     pub supported_commands: HashSet<String>,

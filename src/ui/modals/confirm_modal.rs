@@ -262,6 +262,7 @@ impl Modal for ConfirmModal<'_> {
                 }
             }
             MouseEventKind::Drag { drag_start_position: _ } => {}
+            MouseEventKind::Release => {}
         }
         Ok(())
     }

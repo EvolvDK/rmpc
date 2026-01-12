@@ -3,11 +3,8 @@ use std::sync::LazyLock;
 use anyhow::Result;
 use crossterm::{
     event::{
-        DisableMouseCapture,
-        EnableMouseCapture,
-        KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},

@@ -64,12 +64,13 @@ use crate::{
         mouse_event::MouseEvent,
     },
     ui::{
+        input::InputManager,
         input::InputResultEvent,
         panes::queue_header::QueueHeaderPane,
         widgets::header::PropertyTemplates,
     },
 };
-
+use youtube::YoutubePane;
 pub mod album_art;
 pub mod albums;
 pub mod cava;
@@ -89,7 +90,7 @@ pub mod search;
 pub mod tabs;
 pub mod tag_browser;
 pub mod volume;
-
+pub mod youtube;
 #[derive(Debug, Display, strum::EnumDiscriminants)]
 pub enum Panes<'pane_ref, 'pane> {
     Queue(&'pane_ref mut QueuePane),
@@ -113,12 +114,10 @@ pub enum Panes<'pane_ref, 'pane> {
     Property(PropertyPane<'pane_ref>),
     Others(&'pane_ref mut Box<dyn BoxedPane>),
     Cava(&'pane_ref mut CavaPane),
+    Youtube(&'pane_ref mut YoutubePane),
 }
-
 pub trait BoxedPane: Pane + std::fmt::Debug {}
-
 impl<P: Pane + std::fmt::Debug> BoxedPane for P {}
-
 #[derive(Debug)]
 pub struct PaneContainer<'panes> {
     pub queue: QueuePane,
@@ -137,11 +136,11 @@ pub struct PaneContainer<'panes> {
     pub header: HeaderPane,
     pub tabs: TabsPane<'panes>,
     pub cava: CavaPane,
+    pub youtube: YoutubePane,
     #[cfg(debug_assertions)]
     pub frame_count: FrameCountPane,
     pub others: HashMap<PaneType, Box<dyn BoxedPane>>,
 }
-
 impl<'panes> PaneContainer<'panes> {
     pub fn new(ctx: &Ctx) -> Result<Self> {
         Ok(Self {
@@ -161,12 +160,12 @@ impl<'panes> PaneContainer<'panes> {
             header: HeaderPane::new(),
             tabs: TabsPane::new(ctx)?,
             cava: CavaPane::new(ctx),
+            youtube: YoutubePane::new(ctx),
             #[cfg(debug_assertions)]
             frame_count: FrameCountPane::new(),
             others: Self::init_other_panes(ctx).collect(),
         })
     }
-
     pub fn init_other_panes(
         ctx: &Ctx,
     ) -> impl Iterator<Item = (PaneType, Box<dyn BoxedPane>)> + use<'_> {
@@ -193,7 +192,6 @@ impl<'panes> PaneContainer<'panes> {
                 _ => None,
             })
     }
-
     pub fn get_mut<'pane_ref, 'pane_type_ref: 'pane_ref>(
         &'pane_ref mut self,
         pane: &'pane_type_ref PaneType,
@@ -232,10 +230,10 @@ impl<'panes> PaneContainer<'panes> {
                     .with_context(|| format!("expected pane to be defined {p:?}"))?,
             )),
             PaneType::Cava => Ok(Panes::Cava(&mut self.cava)),
+            PaneType::Youtube => Ok(Panes::Youtube(&mut self.youtube)),
         }
     }
 }
-
 macro_rules! pane_call {
     ($screen:ident, $fn:ident($($param:expr),+)) => {
         match &mut $screen {
@@ -260,40 +258,33 @@ macro_rules! pane_call {
             Panes::Property(s) => s.$fn($($param),+),
             Panes::Others(s) => s.$fn($($param),+),
             Panes::Cava(s) => s.$fn($($param),+),
+            Panes::Youtube(s) => s.$fn($($param),+),
         }
     }
 }
 pub(crate) use pane_call;
-
 #[allow(unused_variables)]
 pub(crate) trait Pane {
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &Ctx) -> Result<()>;
-
     /// For any cleanup operations, ran when the screen hides
     fn on_hide(&mut self, ctx: &Ctx) -> Result<()> {
         Ok(())
     }
-
     /// For work that needs to be done BEFORE the first render
     fn before_show(&mut self, ctx: &Ctx) -> Result<()> {
         Ok(())
     }
-
     /// Used to keep the current state but refresh data
     fn on_event(&mut self, event: &mut UiEvent, is_visible: bool, ctx: &Ctx) -> Result<()> {
         Ok(())
     }
-
     fn handle_insert_mode(&mut self, kind: InputResultEvent, ctx: &mut Ctx) -> Result<()> {
         Ok(())
     }
-
     fn handle_action(&mut self, event: &mut ActionEvent, ctx: &mut Ctx) -> Result<()>;
-
     fn handle_mouse_event(&mut self, event: MouseEvent, ctx: &Ctx) -> Result<()> {
         Ok(())
     }
-
     fn on_query_finished(
         &mut self,
         id: &'static str,
@@ -303,26 +294,20 @@ pub(crate) trait Pane {
     ) -> Result<()> {
         Ok(())
     }
-
     fn calculate_areas(&mut self, area: Rect, ctx: &Ctx) -> Result<()> {
         Ok(())
     }
-
     fn resize(&mut self, area: Rect, ctx: &Ctx) -> Result<()> {
         Ok(())
     }
 }
-
 pub(crate) mod browser {
-
+    use crate::{ctx::Ctx, mpd::commands::Song, shared::mpd_query::PreviewGroup};
     use itertools::Itertools;
     use ratatui::{
         style::Style,
         text::{Line, Span},
     };
-
-    use crate::{ctx::Ctx, mpd::commands::Song, shared::mpd_query::PreviewGroup};
-
     impl Song {
         pub(crate) fn to_preview(
             &self,
@@ -332,9 +317,78 @@ pub(crate) mod browser {
         ) -> Vec<PreviewGroup> {
             let separator = Span::from(": ");
             let start_of_line_spacer = Span::from(" ");
-
             let mut info_group = PreviewGroup::new(Some(" --- [Info]"), Some(group_style));
-
+            if let Some(id) = self.youtube_id() {
+                if let Some(yt) = ctx.youtube_manager.get_cached_metadata(&id) {
+                    info_group.push(
+                        Line::from(vec![
+                            start_of_line_spacer.clone(),
+                            Span::styled("YouTube ID", key_style),
+                            separator.clone(),
+                            Span::from(yt.youtube_id.to_string()),
+                        ])
+                        .into(),
+                    );
+                    info_group.push(
+                        Line::from(vec![
+                            start_of_line_spacer.clone(),
+                            Span::styled("Title", key_style),
+                            separator.clone(),
+                            Span::from(yt.title),
+                        ])
+                        .into(),
+                    );
+                    info_group.push(
+                        Line::from(vec![
+                            start_of_line_spacer.clone(),
+                            Span::styled("Artist", key_style),
+                            separator.clone(),
+                            Span::from(yt.artist),
+                        ])
+                        .into(),
+                    );
+                    if let Some(album) = yt.album {
+                        info_group.push(
+                            Line::from(vec![
+                                start_of_line_spacer.clone(),
+                                Span::styled("Album", key_style),
+                                separator.clone(),
+                                Span::from(album),
+                            ])
+                            .into(),
+                        );
+                    }
+                    info_group.push(
+                        Line::from(vec![
+                            start_of_line_spacer.clone(),
+                            Span::styled("Duration", key_style),
+                            separator.clone(),
+                            Span::from(crate::shared::ext::duration::DurationExt::to_string(
+                                &yt.duration,
+                            )),
+                        ])
+                        .into(),
+                    );
+                    info_group.push(
+                        Line::from(vec![
+                            start_of_line_spacer.clone(),
+                            Span::styled("Link", key_style),
+                            separator.clone(),
+                            Span::from(yt.link),
+                        ])
+                        .into(),
+                    );
+                    return vec![info_group];
+                }
+                let sender = ctx.youtube_manager.sender();
+                let id_str = id.to_string();
+                smol::spawn(async move {
+                    let _ = sender
+                        .send(crate::youtube::events::YouTubeEvent::MetadataRequest(id_str))
+                        .await;
+                })
+                .detach();
+            }
             let file = Line::from(vec![
                 start_of_line_spacer.clone(),
                 Span::styled("File", key_style),
@@ -342,7 +396,6 @@ pub(crate) mod browser {
                 Span::from(self.file.clone()),
             ]);
             info_group.push(file.into());
-
             if let Some(file_name) = self.file_name() {
                 info_group.push(
                     Line::from(vec![
@@ -354,7 +407,6 @@ pub(crate) mod browser {
                     .into(),
                 );
             }
-
             if let Some(title) = self.metadata.get("title") {
                 title.for_each(|item| {
                     info_group.push(
@@ -381,7 +433,6 @@ pub(crate) mod browser {
                     );
                 });
             }
-
             if let Some(album) = self.metadata.get("album") {
                 album.for_each(|item| {
                     info_group.push(
@@ -395,7 +446,6 @@ pub(crate) mod browser {
                     );
                 });
             }
-
             if let Some(duration) = &self.duration {
                 info_group.push(
                     Line::from(vec![
@@ -407,7 +457,6 @@ pub(crate) mod browser {
                     .into(),
                 );
             }
-
             info_group.push(
                 Line::from(vec![
                     start_of_line_spacer.clone(),
@@ -417,7 +466,6 @@ pub(crate) mod browser {
                 ])
                 .into(),
             );
-
             if let Some(added) = &self.added {
                 info_group.push(
                     Line::from(vec![
@@ -429,7 +477,6 @@ pub(crate) mod browser {
                     .into(),
                 );
             }
-
             let mut tags_group = PreviewGroup::new(Some(" --- [Tags]"), Some(group_style));
             for (k, v) in self
                 .metadata
@@ -451,16 +498,13 @@ pub(crate) mod browser {
                     );
                 });
             }
-
             let mut result = vec![info_group, tags_group];
-
             let stickers = ctx.song_stickers(&self.file);
             if let Some(stickers) = stickers
                 && !stickers.is_empty()
             {
                 let mut stickers_group =
                     PreviewGroup::new(Some(" --- [Stickers]"), Some(group_style));
-
                 for (k, v) in stickers.iter().sorted_by_key(|(key, _)| *key) {
                     stickers_group.push(
                         Line::from(vec![
@@ -472,33 +516,56 @@ pub(crate) mod browser {
                         .into(),
                     );
                 }
-
                 result.push(stickers_group);
             }
-
             result
         }
     }
 }
-
 impl Song {
     pub fn title_str(&self, separator: &str) -> Cow<'_, str> {
         self.metadata.get("title").map_or(Cow::Borrowed("Untitled"), |v| v.join(separator))
     }
-
     pub fn artist_str(&self, separator: &str) -> Cow<'_, str> {
         self.metadata.get("artist").map_or(Cow::Borrowed("Unknown"), |v| v.join(separator))
     }
-
     pub fn file_name(&self) -> Option<Cow<'_, str>> {
         std::path::Path::new(&self.file).file_stem().map(|file_name| file_name.to_string_lossy())
     }
-
     pub fn file_ext(&self) -> Option<Cow<'_, str>> {
         std::path::Path::new(&self.file).extension().map(|ext| ext.to_string_lossy())
     }
-
     pub fn format<'song>(
+        &'song self,
+        property: &SongProperty,
+        tag_separator: &str,
+        strategy: TagResolutionStrategy,
+        ctx: Option<&Ctx>,
+    ) -> Option<Cow<'song, str>> {
+        if let Some(ctx) = ctx
+            && let Some(id) = self.youtube_id()
+        {
+            if let Some(yt) = ctx.youtube_manager.get_cached_metadata(&id) {
+                return match property {
+                    SongProperty::Title => Some(Cow::Owned(yt.title)),
+                    SongProperty::Artist => Some(Cow::Owned(yt.artist)),
+                    SongProperty::Album => yt.album.as_ref().map(|a| Cow::Owned(a.clone())),
+                    SongProperty::Duration => Some(Cow::Owned(yt.duration.to_string())),
+                    _ => self.format_internal(property, tag_separator, strategy),
+                };
+            }
+            let sender = ctx.youtube_manager.sender();
+            let id_str = id.to_string();
+            smol::spawn(async move {
+                let _ = sender
+                    .send(crate::youtube::events::YouTubeEvent::MetadataRequest(id_str))
+                    .await;
+            })
+            .detach();
+        }
+        self.format_internal(property, tag_separator, strategy)
+    }
+    fn format_internal<'song>(
         &'song self,
         property: &SongProperty,
         tag_separator: &str,
@@ -542,7 +609,6 @@ impl Song {
             SongProperty::LastModified() => Some(Cow::Owned(self.last_modified.to_string())),
         }
     }
-
     pub fn matches<'a>(
         &self,
         formats: impl IntoIterator<Item = &'a Property<SongProperty>>,
@@ -565,7 +631,7 @@ impl Song {
                             .map(|f| self.matches(std::iter::once(f.as_ref()), filter, ctx))
                     }),
                 PropertyKindOrText::Property(property) => {
-                    self.format(property, "", TagResolutionStrategy::All).map_or_else(
+                    self.format(property, "", TagResolutionStrategy::All, Some(ctx)).map_or_else(
                         || {
                             format
                                 .default
@@ -591,7 +657,6 @@ impl Song {
         }
         return false;
     }
-
     fn default_as_line_ellipsized<'song, 'stickers: 'song>(
         &'song self,
         format: &Property<SongProperty>,
@@ -605,7 +670,6 @@ impl Song {
             self.as_line_ellipsized(f.as_ref(), max_len, symbols, tag_separator, strategy, ctx)
         })
     }
-
     pub fn as_line_ellipsized<'song, 'stickers: 'song>(
         &'song self,
         format: &Property<SongProperty>,
@@ -637,7 +701,7 @@ impl Song {
                     })
                 }),
             PropertyKindOrText::Property(property) => {
-                self.format(property, tag_separator, strategy).map_or_else(
+                self.format(property, tag_separator, strategy, Some(ctx)).map_or_else(
                     || {
                         self.default_as_line_ellipsized(
                             format,
@@ -688,7 +752,6 @@ impl Song {
                     for span in &line.spans {
                         content.push_str(span.content.as_ref());
                     }
-
                     if let Some(replacement) = replacements.get(&content) {
                         return self
                             .as_line_ellipsized(
@@ -712,7 +775,6 @@ impl Song {
                                 })
                             });
                     }
-
                     Some(line)
                 })
                 .or_else(|| {
@@ -737,19 +799,16 @@ impl Song {
                         let truncate_fn =
                             if *from_start { Span::truncate_start } else { Span::truncate_end };
                         let spans_len = line.spans.len();
-
                         for i in 0..spans_len {
                             if remaining_len == 0 {
                                 break;
                             }
                             let i = if *from_start { spans_len - 1 - i } else { i };
                             let mut span = std::mem::take(&mut line.spans[i]);
-
                             let remaining = truncate_fn(&mut span, remaining_len);
                             push_fn(&mut buf, span);
                             remaining_len = remaining_len.saturating_sub(remaining);
                         }
-
                         line.spans = Vec::from(buf);
                         line
                     })
@@ -769,7 +828,6 @@ impl Song {
         }
     }
 }
-
 impl Property<SongProperty> {
     fn default(
         &self,
@@ -780,7 +838,6 @@ impl Property<SongProperty> {
     ) -> Option<String> {
         self.default.as_ref().and_then(|p| p.as_string(song, tag_separator, strategy, ctx))
     }
-
     pub fn as_string(
         &self,
         song: Option<&Song>,
@@ -797,7 +854,7 @@ impl Property<SongProperty> {
                 .or_else(|| self.default(song, tag_separator, strategy, ctx)),
             PropertyKindOrText::Property(property) => {
                 if let Some(song) = song {
-                    song.format(property, tag_separator, strategy).map_or_else(
+                    song.format(property, tag_separator, strategy, Some(ctx)).map_or_else(
                         || self.default(Some(song), tag_separator, strategy, ctx),
                         |v| Some(v.into_owned()),
                     )
@@ -832,7 +889,6 @@ impl Property<SongProperty> {
                             },
                         );
                     }
-
                     Some(result)
                 })
                 .or_else(|| {
@@ -860,7 +916,6 @@ impl Property<SongProperty> {
         }
     }
 }
-
 impl Property<PropertyKind> {
     fn default_as_span<'song: 's, 's>(
         &'s self,
@@ -871,7 +926,6 @@ impl Property<PropertyKind> {
     ) -> Option<Either<Span<'s>, Vec<Span<'s>>>> {
         self.default.as_ref().and_then(|p| p.as_span(song, ctx, tag_separator, strategy))
     }
-
     pub fn as_span<'song: 's, 's>(
         &'s self,
         song: Option<&'song Song>,
@@ -894,7 +948,7 @@ impl Property<PropertyKind> {
             }
             PropertyKindOrText::Property(PropertyKind::Song(property)) => {
                 if let Some(song) = song {
-                    song.format(property, tag_separator, strategy).map_or_else(
+                    song.format(property, tag_separator, strategy, Some(ctx)).map_or_else(
                         || self.default_as_span(Some(song), ctx, tag_separator, strategy),
                         |s| Some(Either::Left(Span::styled(s, style))),
                     )
@@ -1105,7 +1159,6 @@ impl Property<PropertyKind> {
                                     replacement.default_as_span(song, ctx, tag_separator, strategy)
                                 });
                         }
-
                         Some(Either::Left(span))
                     }
                     Some(Either::Right(spans)) => {
@@ -1113,7 +1166,6 @@ impl Property<PropertyKind> {
                         for span in &spans {
                             content.push_str(span.content.as_ref());
                         }
-
                         if let Some(replacement) = replacements.get(&content) {
                             return replacement
                                 .as_span(song, ctx, tag_separator, strategy)
@@ -1121,7 +1173,6 @@ impl Property<PropertyKind> {
                                     replacement.default_as_span(song, ctx, tag_separator, strategy)
                                 });
                         }
-
                         Some(Either::Right(spans))
                     }
                     None => self.default_as_span(song, ctx, tag_separator, strategy),
@@ -1141,14 +1192,12 @@ impl Property<PropertyKind> {
                         let push_fn =
                             if *from_start { VecDeque::push_front } else { VecDeque::push_back };
                         let spans_len = spans.len();
-
                         for i in 0..spans.len() {
                             if remaining_len == 0 {
                                 break;
                             }
                             let i = if *from_start { spans_len - 1 - i } else { i };
                             let mut span = std::mem::take(&mut spans[i]);
-
                             let remaining = truncate_fn(&mut span, remaining_len);
                             push_fn(&mut buf, span);
                             remaining_len = remaining_len.saturating_sub(remaining);
@@ -1161,7 +1210,6 @@ impl Property<PropertyKind> {
         }
     }
 }
-
 impl SizedPaneOrSplit {
     pub fn for_each_pane(
         &self,
@@ -1180,7 +1228,6 @@ impl SizedPaneOrSplit {
             ctx,
         )
     }
-
     pub fn for_each_pane_custom_data<T>(
         &self,
         area: Rect,
@@ -1190,7 +1237,6 @@ impl SizedPaneOrSplit {
         ctx: &Ctx,
     ) -> Result<()> {
         let mut stack = vec![(self, area)];
-
         let song = ctx.find_current_song_in_queue().map(|(_, song)| song);
         while let Some((configured_panes, area)) = stack.pop() {
             match configured_panes {
@@ -1204,12 +1250,10 @@ impl SizedPaneOrSplit {
                     } else {
                         let templs = PropertyTemplates::new(&pane.border_title);
                         let title = templs.format(song, ctx, &ctx.config);
-
                         block = block
                             .title(title)
                             .title_position(pane.border_title_position)
                             .title_alignment(pane.border_title_alignment);
-
                         let pane_area = block.inner(area);
                         pane_callback(pane, pane_area, block, area, &mut custom_data)?;
                     }
@@ -1231,7 +1275,6 @@ impl SizedPaneOrSplit {
                         panes.iter().map(|pane| pane.size.into_constraint(parent_other_size));
                     let mut block =
                         Block::default().borders(*borders).border_set(border_symbols.into());
-
                     if border_title.is_empty() {
                         let pane_areas = block.inner(area);
                         let areas = Layout::new(*direction, constraints).split(pane_areas);
@@ -1246,7 +1289,6 @@ impl SizedPaneOrSplit {
                             .title(title)
                             .title_position(*border_title_position)
                             .title_alignment(*border_title_alignment);
-
                         let pane_areas = block.inner(area);
                         let areas = Layout::new(*direction, constraints).split(pane_areas);
                         split_callback(block, area, &mut custom_data)?;
@@ -1257,15 +1299,12 @@ impl SizedPaneOrSplit {
                 }
             }
         }
-
         Ok(())
     }
 }
-
 pub(crate) trait StringExt {
     fn ellipsize(&self, max_len: usize, symbols: &SymbolsConfig) -> Cow<'_, str>;
 }
-
 impl StringExt for Cow<'_, str> {
     fn ellipsize(&self, max_len: usize, symbols: &SymbolsConfig) -> Cow<'_, str> {
         if self.chars().count() > max_len {
@@ -1281,7 +1320,6 @@ impl StringExt for Cow<'_, str> {
         }
     }
 }
-
 impl StringExt for &str {
     fn ellipsize(&self, max_len: usize, symbols: &SymbolsConfig) -> Cow<'_, str> {
         if self.chars().count() > max_len {
@@ -1297,7 +1335,6 @@ impl StringExt for &str {
         }
     }
 }
-
 impl StringExt for String {
     fn ellipsize(&self, max_len: usize, symbols: &SymbolsConfig) -> Cow<'_, str> {
         if self.chars().count() > max_len {
@@ -1313,26 +1350,14 @@ impl StringExt for String {
         }
     }
 }
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod format_tests {
-    use std::{collections::HashMap, time::Duration};
-
-    use either::Either;
-    use ratatui::{style::Style, text::Span};
-    use rstest::rstest;
-
     use crate::{
         config::theme::{
-            StyleFile,
-            TagResolutionStrategy,
+            StyleFile, TagResolutionStrategy,
             properties::{
-                Property,
-                PropertyKind,
-                PropertyKindOrText,
-                SongProperty,
-                StatusProperty,
+                Property, PropertyKind, PropertyKindOrText, SongProperty, StatusProperty,
                 StatusPropertyFile,
             },
         },
@@ -1340,11 +1365,13 @@ mod format_tests {
         mpd::commands::{Song, State, Status, Volume, status::OnOffOneshot},
         tests::fixtures::ctx,
     };
-
+    use either::Either;
+    use ratatui::{style::Style, text::Span};
+    use rstest::rstest;
+    use std::{collections::HashMap, time::Duration};
     mod replace {
         use super::*;
         use crate::config::theme::{SymbolsConfig, properties::Transform};
-
         #[rstest]
         // simple 1:1 replace
         #[case(PropertyKindOrText::Text("abcdefgh".into()),
@@ -1393,12 +1420,16 @@ mod format_tests {
             let format = Property::<PropertyKind> {
                 kind: PropertyKindOrText::Transform(Transform::Replace {
                     content: Box::new(Property { kind: input_props, style: None, default: None }),
-                    replacements: [(input, Property {
-                        kind: replace_props,
-                        style: None,
-                        default: replace_default
-                            .map(|d| Box::new(Property { kind: d, style: None, default: None })),
-                    })]
+                    replacements: [(
+                        input,
+                        Property {
+                            kind: replace_props,
+                            style: None,
+                            default: replace_default.map(|d| {
+                                Box::new(Property { kind: d, style: None, default: None })
+                            }),
+                        },
+                    )]
                     .into_iter()
                     .collect(),
                 }),
@@ -1406,9 +1437,7 @@ mod format_tests {
                 default: input_default
                     .map(|d| Box::new(Property { kind: d, style: None, default: None })),
             };
-
             let result = format.as_span(None, &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(
                 match result {
                     Some(Either::Left(v)) => Some(v.content.into_owned()),
@@ -1419,7 +1448,6 @@ mod format_tests {
                 Some(expected)
             );
         }
-
         #[rstest]
         // simple 1:1 replace
         #[case(PropertyKindOrText::Text("abcdefgh".into()),
@@ -1468,12 +1496,16 @@ mod format_tests {
             let format = Property::<SongProperty> {
                 kind: PropertyKindOrText::Transform(Transform::Replace {
                     content: Box::new(Property { kind: input_props, style: None, default: None }),
-                    replacements: [(input, Property {
-                        kind: replace_props,
-                        style: None,
-                        default: replace_default
-                            .map(|d| Box::new(Property { kind: d, style: None, default: None })),
-                    })]
+                    replacements: [(
+                        input,
+                        Property {
+                            kind: replace_props,
+                            style: None,
+                            default: replace_default.map(|d| {
+                                Box::new(Property { kind: d, style: None, default: None })
+                            }),
+                        },
+                    )]
                     .into_iter()
                     .collect(),
                 }),
@@ -1481,12 +1513,9 @@ mod format_tests {
                 default: input_default
                     .map(|d| Box::new(Property { kind: d, style: None, default: None })),
             };
-
             let result = format.as_string(None, "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some(expected.to_string()));
         }
-
         #[rstest]
         #[rstest]
         // simple 1:1 replace
@@ -1536,12 +1565,16 @@ mod format_tests {
             let format = Property::<SongProperty> {
                 kind: PropertyKindOrText::Transform(Transform::Replace {
                     content: Box::new(Property { kind: input_props, style: None, default: None }),
-                    replacements: [(input, Property {
-                        kind: replace_props,
-                        style: None,
-                        default: replace_default
-                            .map(|d| Box::new(Property { kind: d, style: None, default: None })),
-                    })]
+                    replacements: [(
+                        input,
+                        Property {
+                            kind: replace_props,
+                            style: None,
+                            default: replace_default.map(|d| {
+                                Box::new(Property { kind: d, style: None, default: None })
+                            }),
+                        },
+                    )]
                     .into_iter()
                     .collect(),
                 }),
@@ -1549,7 +1582,6 @@ mod format_tests {
                 default: input_default
                     .map(|d| Box::new(Property { kind: d, style: None, default: None })),
             };
-
             let song = Song::default();
             let result = song.as_line_ellipsized(
                 &format,
@@ -1559,21 +1591,17 @@ mod format_tests {
                 TagResolutionStrategy::All,
                 &ctx,
             );
-
             assert_eq!(
                 result.map(|line| line.spans.iter().map(|s| s.content.clone()).collect::<String>()),
                 Some(expected)
             );
         }
     }
-
     mod truncate {
-        use itertools::Itertools;
-        use ratatui::text::Line;
-
         use super::*;
         use crate::config::theme::{SymbolsConfig, properties::Transform};
-
+        use itertools::Itertools;
+        use ratatui::text::Line;
         #[rstest]
         #[case(PropertyKindOrText::Text("abcdefgh".into()), 0, false, Either::Left(""))]
         #[case(PropertyKindOrText::Text("abcdefgh".into()), 0, true, Either::Left(""))]
@@ -1635,9 +1663,7 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let result = format.as_span(None, &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(
                 result,
                 Some(match expected {
@@ -1649,7 +1675,6 @@ mod format_tests {
                 })
             );
         }
-
         #[rstest]
         #[case(PropertyKindOrText::Text("abcdefgh".into()), 0, false, "")]
         #[case(PropertyKindOrText::Text("abcdefgh".into()), 0, true, "")]
@@ -1711,12 +1736,9 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let result = format.as_string(None, "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some(expected.to_string()));
         }
-
         #[rstest]
         #[case(PropertyKindOrText::Text("abcdefgh".into()), 0, false, Either::Left(""))]
         #[case(PropertyKindOrText::Text("abcdefgh".into()), 0, true, Either::Left(""))]
@@ -1778,7 +1800,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song::default();
             let result = song.as_line_ellipsized(
                 &format,
@@ -1788,7 +1809,6 @@ mod format_tests {
                 TagResolutionStrategy::All,
                 &ctx,
             );
-
             assert_eq!(
                 result,
                 Some(match expected {
@@ -1799,10 +1819,8 @@ mod format_tests {
             );
         }
     }
-
     mod correct_values {
         use super::*;
-
         #[rstest]
         #[case(SongProperty::Title, "title")]
         #[case(SongProperty::Artist, "artist")]
@@ -1820,7 +1838,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 id: 123,
                 file: "file".to_owned(),
@@ -1834,12 +1851,9 @@ mod format_tests {
                 last_modified: chrono::Utc::now(),
                 added: None,
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some(expected.to_string()));
         }
-
         #[rstest]
         #[case(StatusProperty::Volume, "100")]
         #[case(StatusProperty::Elapsed, "2:03")]
@@ -1856,7 +1870,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 id: 123,
                 file: "file".to_owned(),
@@ -1883,15 +1896,12 @@ mod format_tests {
                 state: State::Play,
                 ..Default::default()
             };
-
             let result = format.as_span(Some(&song), &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(
                 result,
                 Some(either::Either::<Span<'_>, Vec<Span<'_>>>::Left(Span::raw(expected)))
             );
         }
-
         #[rstest]
         // Standard format tests (no separator = MM:SS format)
         #[case(StatusProperty::QueueTimeTotal { separator: None }, "6:09", Duration::from_secs(0))]
@@ -1916,7 +1926,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             // Test with a fake current song
             let current_song = Song {
                 id: 0,
@@ -1929,7 +1938,6 @@ mod format_tests {
                 last_modified: chrono::Utc::now(),
                 added: None,
             };
-
             // Set up the app context with a fake queue and status
             let mut queue = vec![current_song.clone()];
             queue.push(Song {
@@ -1948,7 +1956,6 @@ mod format_tests {
                 last_modified: chrono::Utc::now(),
                 added: None,
             });
-
             ctx.queue = queue;
             ctx.status = Status {
                 elapsed,
@@ -1962,13 +1969,11 @@ mod format_tests {
                 ctx.queue.iter().map(|s| s.duration.unwrap_or_default()).sum();
 
             let result = format.as_span(Some(&current_song), &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(
                 result,
                 Some(either::Either::<Span<'_>, Vec<Span<'_>>>::Left(Span::raw(expected)))
             );
         }
-
         #[rstest]
         // no current song or if the queue is empty, the queue time should be 0:00
         #[case(StatusProperty::QueueTimeTotal { separator: None }, "0:00")]
@@ -1985,18 +1990,14 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             ctx.queue = vec![];
             ctx.status = Status { state: State::Stop, ..Default::default() };
-
             let result = format.as_span(None, &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(
                 result,
                 Some(either::Either::<Span<'_>, Vec<Span<'_>>>::Left(Span::raw(expected)))
             );
         }
-
         #[rstest]
         // Test edge case: songs without duration
         // if somehow the queue contains songs without duration, the queue time should still be 0:00
@@ -2012,7 +2013,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song_no_duration = Song {
                 id: 0,
                 file: "no_duration.mp3".to_owned(),
@@ -2021,19 +2021,15 @@ mod format_tests {
                 last_modified: chrono::Utc::now(),
                 added: None,
             };
-
             ctx.queue = vec![song_no_duration.clone()];
             ctx.status = Status { state: State::Play, song: Some(0), ..Default::default() };
-
             let result =
                 format.as_span(Some(&song_no_duration), &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(
                 result,
                 Some(either::Either::<Span<'_>, Vec<Span<'_>>>::Left(Span::raw(expected)))
             );
         }
-
         #[rstest]
         #[case("otherplay", "otherstopped", "otherpaused", State::Play, "otherplay")]
         #[case("otherplay", "otherstopped", "otherpaused", State::Pause, "otherpaused")]
@@ -2058,18 +2054,14 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song { id: 1, file: "file".to_owned(), ..Default::default() };
             ctx.status = Status { state, ..Default::default() };
-
             let result = format.as_span(Some(&song), &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(
                 result,
                 Some(either::Either::<Span<'_>, Vec<Span<'_>>>::Left(Span::raw(expected_label)))
             );
         }
-
         #[rstest]
         #[case(StatusPropertyFile::ConsumeV2 { on_label: "ye".to_string(), off_label: "naw".to_string(), oneshot_label: "1111".to_string(), on_style: None, off_style: None, oneshot_style: None }, Status { consume: OnOffOneshot::On, ..Default::default() }, "ye")]
         #[case(StatusPropertyFile::ConsumeV2 { on_label: "ye".to_string(), off_label: "naw".to_string(), oneshot_label: "1111".to_string(), on_style: None, off_style: None, oneshot_style: None }, Status { consume: OnOffOneshot::Off, ..Default::default() }, "naw")]
@@ -2102,16 +2094,11 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song { id: 1, file: "file".to_owned(), ..Default::default() };
-
             ctx.status = status;
-
             let result = format.as_span(Some(&song), &ctx, "", TagResolutionStrategy::All);
-
             assert_eq!(result, Some(Either::Left(Span::raw(expected_label))));
         }
-
         #[rstest]
         #[case(StatusPropertyFile::ConsumeV2 { on_style: Some(StyleFile::builder().fg("red".to_string()).build()), off_style: Some(StyleFile::builder().fg("green".to_string()).build()), oneshot_style: Some(StyleFile::builder().fg("blue".to_string()).build()), on_label: String::new(), off_label: String::new(), oneshot_label: String::new() }, Status { consume: OnOffOneshot::On, ..Default::default() }, Some(Style::default().red()))]
         #[case(StatusPropertyFile::SingleV2  { on_style: Some(StyleFile::builder().fg("red".to_string()).build()), off_style: Some(StyleFile::builder().fg("green".to_string()).build()), oneshot_style: Some(StyleFile::builder().fg("blue".to_string()).build()),  on_label: String::new(), off_label: String::new(), oneshot_label: String::new() }, Status { single: OnOffOneshot::On, ..Default::default() }, Some(Style::default().red()))]
@@ -2132,13 +2119,9 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song { id: 1, file: "file".to_owned(), ..Default::default() };
-
             ctx.status = status;
-
             let result = format.as_span(Some(&song), &ctx, "", TagResolutionStrategy::All);
-
             dbg!(&result);
             assert_eq!(
                 result,
@@ -2146,10 +2129,8 @@ mod format_tests {
             );
         }
     }
-
     mod property {
         use super::*;
-
         #[rstest]
         fn works(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2157,7 +2138,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2165,12 +2145,9 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("title".to_owned()));
         }
-
         #[rstest]
         fn falls_back(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2185,7 +2162,6 @@ mod format_tests {
                     .into(),
                 ),
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2193,12 +2169,9 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("fallback".to_owned()));
         }
-
         #[rstest]
         fn falls_back_to_none(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2206,7 +2179,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2214,16 +2186,12 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, None);
         }
     }
-
     mod text {
         use super::*;
-
         #[rstest]
         fn works(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2231,7 +2199,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2239,12 +2206,9 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("test".to_owned()));
         }
-
         #[rstest]
         fn fallback_is_ignored(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2259,7 +2223,6 @@ mod format_tests {
                     .into(),
                 ),
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2267,16 +2230,12 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("test".to_owned()));
         }
     }
-
     mod group {
         use super::*;
-
         #[rstest]
         fn group_no_fallback(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2295,7 +2254,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2303,12 +2261,9 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, None);
         }
-
         #[rstest]
         fn group_fallback(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2334,7 +2289,6 @@ mod format_tests {
                     .into(),
                 ),
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2342,12 +2296,9 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("fallback".to_owned()));
         }
-
         #[rstest]
         fn group_resolved(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2373,7 +2324,6 @@ mod format_tests {
                     .into(),
                 ),
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2381,12 +2331,9 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("titletext".to_owned()));
         }
-
         #[rstest]
         fn group_fallback_in_group(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2412,7 +2359,6 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 metadata: HashMap::from([
                     ("artist".to_string(), "artist".into()),
@@ -2420,12 +2366,9 @@ mod format_tests {
                 ]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("fallbacktext".to_owned()));
         }
-
         #[rstest]
         fn group_nesting(ctx: Ctx) {
             let format = Property::<SongProperty> {
@@ -2462,14 +2405,11 @@ mod format_tests {
                 style: None,
                 default: None,
             };
-
             let song = Song {
                 metadata: HashMap::from([("title".to_string(), "title".into())]),
                 ..Default::default()
             };
-
             let result = format.as_string(Some(&song), "", TagResolutionStrategy::All, &ctx);
-
             assert_eq!(result, Some("innerfallbackouter".to_owned()));
         }
     }

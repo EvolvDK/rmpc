@@ -30,6 +30,10 @@ pub fn default_column_widths() -> Vec<u16> {
     vec![20, 38, 42]
 }
 
+pub fn default_youtube_column_widths() -> Vec<u16> {
+    vec![40, 30, 30]
+}
+
 pub fn bool<const V: bool>() -> bool {
     V
 }
@@ -644,4 +648,8 @@ pub fn components() -> HashMap<String, PaneOrSplitFile> {
             ],
         }),
     ])
+}
+
+pub fn lyrics_sub_langs() -> String {
+    "*.orig,en.*,fr.*".to_string()
 }

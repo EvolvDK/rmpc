@@ -30,7 +30,9 @@ use crate::{
         dir_or_song::DirOrSong,
         dirstack::{DirStack, DirStackItem},
         input::InputResultEvent,
-        modals::{info_list_modal::InfoListModal, input_modal::InputModal},
+        modals::{
+            info_list_modal::InfoListModal, input_modal::InputModal, select_modal::SelectModal,
+        },
         widgets::browser::{Browser, BrowserArea},
     },
 };
@@ -49,12 +51,16 @@ const INIT: &str = "init";
 const REINIT: &str = "reinit";
 const FETCH_DATA: &str = "fetch_data";
 const PLAYLIST_INFO: &str = "preview";
+const ADD_TO_PLAYLIST: &str = "add_to_playlist";
+const ADD_TO_PLAYLIST_MULTIPLE: &str = "add_to_playlist_multiple";
 
 impl PlaylistsPane {
     pub fn new(_ctx: &Ctx) -> Self {
         Self { stack: DirStack::default(), browser: Browser::new(), initialized: false }
     }
 }
+
+use crate::ui::modals::menu::add_to_playlist_or_show_modal;
 
 impl Pane for PlaylistsPane {
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &Ctx) -> Result<()> {
@@ -252,26 +258,25 @@ impl Pane for PlaylistsPane {
                         ctx.render()?;
                     }
                     [] => {
-                        let Some((selected_idx, selected_playlist)) = self
+                        let current_selection = self
                             .stack()
                             .current()
                             .selected_with_idx()
-                            .map(|(idx, playlist)| (idx, playlist.as_path()))
-                        else {
-                            log::warn!(stack:? = self.stack(); "Expected playlist to be selected");
-                            return Ok(());
-                        };
-                        let idx_to_select = new_stack
-                            .current()
-                            .items
-                            .iter()
-                            .find_position(|item| item.as_path() == selected_playlist)
-                            .map_or(selected_idx, |(idx, _)| idx);
-                        new_stack.current_mut().state.set_viewport_len(old_viewport_len);
-                        new_stack
-                            .current_mut()
-                            .state
-                            .select(Some(idx_to_select), ctx.config.scrolloff);
+                            .map(|(idx, playlist)| (idx, playlist.as_path()));
+
+                        if let Some((selected_idx, selected_playlist)) = current_selection {
+                            let idx_to_select = new_stack
+                                .current()
+                                .items
+                                .iter()
+                                .find_position(|item| item.as_path() == selected_playlist)
+                                .map_or(selected_idx, |(idx, _)| idx);
+                            new_stack.current_mut().state.set_viewport_len(old_viewport_len);
+                            new_stack
+                                .current_mut()
+                                .state
+                                .select(Some(idx_to_select), ctx.config.scrolloff);
+                        }
 
                         self.stack = new_stack;
                         if let Some(sel) = self.stack.current().selected() {
@@ -282,6 +287,49 @@ impl Pane for PlaylistsPane {
                         log::error!(stack:? = self.stack; "Invalid playlist stack state");
                     }
                 }
+            }
+            (ADD_TO_PLAYLIST, MpdQueryResult::AddToPlaylist { playlists, song_file }) => {
+                modal!(
+                    ctx,
+                    SelectModal::builder()
+                        .ctx(ctx)
+                        .options(playlists)
+                        .confirm_label("Add")
+                        .title("Select a playlist")
+                        .on_confirm(move |ctx, selected, _idx| {
+                            add_to_playlist_or_show_modal(
+                                selected,
+                                vec![song_file],
+                                ctx.config.playlist_duplicate_strategy,
+                                ctx,
+                            );
+                            Ok(())
+                        })
+                        .build()
+                );
+            }
+            (
+                ADD_TO_PLAYLIST_MULTIPLE,
+                MpdQueryResult::AddToPlaylistMultiple { playlists, song_files },
+            ) => {
+                modal!(
+                    ctx,
+                    SelectModal::builder()
+                        .ctx(ctx)
+                        .options(playlists)
+                        .confirm_label("Add")
+                        .title("Select a playlist")
+                        .on_confirm(move |ctx, selected, _idx| {
+                            add_to_playlist_or_show_modal(
+                                selected,
+                                song_files,
+                                ctx.config.playlist_duplicate_strategy,
+                                ctx,
+                            );
+                            Ok(())
+                        })
+                        .build()
+                );
             }
             _ => {}
         }

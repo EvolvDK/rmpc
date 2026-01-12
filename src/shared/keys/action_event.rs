@@ -3,7 +3,7 @@ use std::{ops::Not, sync::Arc};
 #[cfg(debug_assertions)]
 use crate::config::keys::LogsActions;
 use crate::{
-    config::keys::{CommonAction, GlobalAction, QueueActions},
+    config::keys::{CommonAction, GlobalAction, QueueActions, YoutubeActions},
     shared::keys::actions::Actions,
 };
 
@@ -53,6 +53,18 @@ impl ActionEvent {
             .already_handled
             .not()
             .then(|| self.actions.iter().find_map(|act| act.as_queue()))
+            .flatten();
+        if result.is_some() {
+            self.already_handled = true;
+        }
+        result
+    }
+
+    pub fn claim_youtube(&mut self) -> Option<&YoutubeActions> {
+        let result = self
+            .already_handled
+            .not()
+            .then(|| self.actions.iter().find_map(|act| act.as_youtube()))
             .flatten();
         if result.is_some() {
             self.already_handled = true;

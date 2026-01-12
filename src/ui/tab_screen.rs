@@ -140,6 +140,9 @@ impl TabScreen {
                     .and_then(|(id, _)| self.panes.panes_iter().find(|pane| pane.id == *id));
 
                 if let Some(pane) = pane_to_focus {
+                    if self.focused != pane.id {
+                        ctx.input.normal_mode();
+                    }
                     self.set_focused(pane.id);
                 }
                 ctx.render()?;
@@ -154,6 +157,9 @@ impl TabScreen {
                     .and_then(|(id, _)| self.panes.panes_iter().find(|pane| pane.id == *id));
 
                 if let Some(pane) = pane_to_focus {
+                    if self.focused != pane.id {
+                        ctx.input.normal_mode();
+                    }
                     self.set_focused(pane.id);
                 }
                 ctx.render()?;
@@ -168,6 +174,9 @@ impl TabScreen {
                     .and_then(|(id, _)| self.panes.panes_iter().find(|pane| pane.id == *id));
 
                 if let Some(pane) = pane_to_focus {
+                    if self.focused != pane.id {
+                        ctx.input.normal_mode();
+                    }
                     self.set_focused(pane.id);
                 }
                 ctx.render()?;
@@ -182,6 +191,9 @@ impl TabScreen {
                     .and_then(|(id, _)| self.panes.panes_iter().find(|pane| pane.id == *id));
 
                 if let Some(pane) = pane_to_focus {
+                    if self.focused != pane.id {
+                        ctx.input.normal_mode();
+                    }
                     self.set_focused(pane.id);
                 }
                 ctx.render()?;
@@ -221,6 +233,9 @@ impl TabScreen {
             let id = *pane_id;
 
             if matches!(event.kind, MouseEventKind::LeftClick) && data.focusable {
+                if self.focused != id {
+                    ctx.input.normal_mode();
+                }
                 self.set_focused(id);
             }
 

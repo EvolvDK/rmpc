@@ -39,7 +39,7 @@ pub use address::MpdAddress;
 pub use search::Search;
 
 use self::{
-    keys::{KeyConfig, KeyConfigFile},
+    keys::{KeyConfig, KeyConfigFile, actions::DuplicateStrategy},
     theme::{ConfigColor, UiConfig, UiConfigFile},
 };
 use crate::{
@@ -50,6 +50,13 @@ use crate::{
     shared::{lrc::LrcOffset, terminal::TERMINAL},
     tmux,
 };
+
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LyricsAutoDownload {
+    #[default]
+    None,
+    Auto,
+}
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Default, Clone)]
@@ -62,6 +69,8 @@ pub struct Config {
     pub enable_lyrics_index: bool,
     pub enable_lyrics_hot_reload: bool,
     pub volume_step: u8,
+    pub lyrics_auto_download: LyricsAutoDownload,
+    pub lyrics_sub_langs: String,
     pub max_fps: u32,
     pub scrolloff: usize,
     pub wrap_navigation: bool,
@@ -96,6 +105,37 @@ pub struct Config {
     pub directories_sort: Arc<SortOptions>,
     pub cava: Cava,
     pub auto_open_downloads: bool,
+    pub youtube: YouTubeConfig,
+    pub playlist_duplicate_strategy: DuplicateStrategy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct YouTubeConfigFile {
+    #[serde(default = "defaults::usize::<100>")]
+    pub search_results_limit: usize,
+    #[serde(default = "defaults::default_youtube_column_widths")]
+    pub column_widths: Vec<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct YouTubeConfig {
+    pub search_results_limit: usize,
+    pub column_widths: Vec<u16>,
+}
+
+impl Default for YouTubeConfigFile {
+    fn default() -> Self {
+        Self { search_results_limit: 100, column_widths: defaults::default_youtube_column_widths() }
+    }
+}
+
+impl From<YouTubeConfigFile> for YouTubeConfig {
+    fn from(value: YouTubeConfigFile) -> Self {
+        Self {
+            search_results_limit: value.search_results_limit,
+            column_widths: value.column_widths,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -123,6 +163,10 @@ pub struct ConfigFile {
     enable_lyrics_index: bool,
     #[serde(default = "defaults::bool::<false>")]
     enable_lyrics_hot_reload: bool,
+    #[serde(default)]
+    lyrics_auto_download: LyricsAutoDownload,
+    #[serde(default = "defaults::lyrics_sub_langs")]
+    lyrics_sub_langs: String,
     #[serde(default)]
     pub theme: Option<String>,
     #[serde(default = "defaults::u8::<5>")]
@@ -194,6 +238,10 @@ pub struct ConfigFile {
     pub cava: CavaFile,
     #[serde(default = "defaults::bool::<true>")]
     pub auto_open_downloads: bool,
+    #[serde(default)]
+    pub youtube: YouTubeConfigFile,
+    #[serde(default)]
+    pub playlist_duplicate_strategy: DuplicateStrategy,
 }
 
 #[derive(Debug, Serialize, Deserialize, Copy, Clone, PartialEq, Eq)]
@@ -234,6 +282,8 @@ impl Default for ConfigFile {
             lyrics_offset_ms: 0,
             enable_lyrics_index: true,
             enable_lyrics_hot_reload: false,
+            lyrics_auto_download: LyricsAutoDownload::default(),
+            lyrics_sub_langs: defaults::lyrics_sub_langs(),
             image_method: None,
             select_current_song_on_change: false,
             center_current_song_on_change: false,
@@ -262,6 +312,8 @@ impl Default for ConfigFile {
             cava: CavaFile::default(),
             show_playlists_in_browser: ShowPlaylistsMode::default(),
             auto_open_downloads: true,
+            youtube: YouTubeConfigFile::default(),
+            playlist_duplicate_strategy: DuplicateStrategy::default(),
         }
     }
 }
@@ -427,6 +479,8 @@ impl ConfigFile {
             lyrics_offset: LrcOffset::from_millis(self.lyrics_offset_ms),
             enable_lyrics_index: self.enable_lyrics_index,
             enable_lyrics_hot_reload: self.enable_lyrics_hot_reload,
+            lyrics_auto_download: self.lyrics_auto_download,
+            lyrics_sub_langs: self.lyrics_sub_langs,
             tabs,
             original_tabs_definition,
             active_panes,
@@ -506,6 +560,8 @@ impl ConfigFile {
             reflect_changes_to_playlist: self.reflect_changes_to_playlist,
             cava: self.cava.into(),
             auto_open_downloads: self.auto_open_downloads,
+            youtube: self.youtube.into(),
+            playlist_duplicate_strategy: self.playlist_duplicate_strategy,
         };
 
         if skip_album_art_check {

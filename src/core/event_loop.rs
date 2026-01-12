@@ -25,13 +25,8 @@ use crate::{
         macros::{modal, status_error, status_warn},
         mpd_client_ext::MpdClientExt,
         mpd_query::{
-            EXTERNAL_COMMAND,
-            GLOBAL_QUEUE_UPDATE,
-            GLOBAL_STATUS_UPDATE,
-            GLOBAL_STICKERS_UPDATE,
-            GLOBAL_VOLUME_UPDATE,
-            MpdQueryResult,
-            run_status_update,
+            EXTERNAL_COMMAND, GLOBAL_QUEUE_UPDATE, GLOBAL_STATUS_UPDATE, GLOBAL_STICKERS_UPDATE,
+            GLOBAL_VOLUME_UPDATE, MpdQueryResult, run_status_update,
         },
     },
     ui::{
@@ -46,14 +41,37 @@ use crate::{
 
 static ON_RESIZE_SCHEDULE_ID: LazyLock<Id> = LazyLock::new(id::new);
 
+struct ErrorTracker {
+    last_error: Option<(u32, String, Instant)>,
+}
+
+impl ErrorTracker {
+    fn should_handle(&mut self, song_id: u32, error: &str) -> bool {
+        if let Some((last_id, last_err, timestamp)) = &self.last_error {
+            if *last_id == song_id
+                && last_err == error
+                && timestamp.elapsed() < Duration::from_secs(5)
+            {
+                return false;
+            }
+        }
+        self.last_error = Some((song_id, error.to_string(), Instant::now()));
+        true
+    }
+
+    fn clear(&mut self) {
+        self.last_error = None;
+    }
+}
+
 pub fn init<B: Backend + std::io::Write + Send + 'static>(
     ctx: Ctx,
     event_rx: Receiver<AppEvent>,
     terminal: Terminal<B>,
-) -> std::io::Result<std::thread::JoinHandle<Terminal<B>>> {
-    std::thread::Builder::new()
-        .name("main".to_owned())
-        .spawn(move || main_task(ctx, event_rx, terminal))
+) -> anyhow::Result<std::thread::JoinHandle<Terminal<B>>> {
+    Ok(std::thread::Builder::new()
+        .name("event_loop".to_owned())
+        .spawn(move || main_task(ctx, event_rx, terminal))?)
 }
 
 fn main_task<B: Backend + std::io::Write>(
@@ -71,6 +89,7 @@ fn main_task<B: Backend + std::io::Write>(
     let mut last_render = std::time::Instant::now().sub(Duration::from_secs(10));
     let mut additional_evs = HashSet::new();
     let mut connected = true;
+    let mut error_tracker = ErrorTracker { last_error: None };
     ui.before_show(area, &mut ctx).expect("Initial render init to succeed");
     let mut _update_loop_guard = None;
     let mut _update_db_loop_guard = None;
@@ -232,6 +251,9 @@ fn main_task<B: Backend + std::io::Write>(
                     render_wanted = true;
                 }
                 AppEvent::UserKeyInput(key) => {
+                    if let Err(err) = ui.on_event(UiEvent::UserKeyInput(key), &mut ctx) {
+                        log::error!(error:? = err; "UI failed to handle user key input event");
+                    }
                     ctx.key_resolver.handle_key_event(key.into(), &ctx);
                     render_wanted = true;
                 }
@@ -547,14 +569,49 @@ fn main_task<B: Backend + std::io::Write>(
                                 }
                                 song_changed = true;
                                 ctx.song_played = Some(Duration::ZERO);
+
+                                // Proactive look-ahead refresh for the next song in queue
+                                if let Some(next_song) = ctx
+                                    .status
+                                    .nextsongid
+                                    .and_then(|id| ctx.queue.iter().find(|s| s.id == id))
+                                {
+                                    ctx.refresh_youtube_song_if_expired(next_song, false);
+                                }
                             }
-                            if song_changed
-                                && let Err(err) = ui.on_event(UiEvent::SongChanged, &mut ctx)
-                            {
-                                status_error!(error:? = err; "UI failed to handle idle event, error: '{}'", err.to_status());
+                            if song_changed {
+                                if let Err(err) = ui.on_event(UiEvent::SongChanged, &mut ctx) {
+                                    status_error!(error:? = err; "UI failed to handle idle event, error: '{}'", err.to_status());
+                                }
+
+                                if ctx.config.lyrics_auto_download
+                                    == crate::config::LyricsAutoDownload::Auto
+                                    && ctx.config.lyrics_dir.is_some()
+                                    && ctx.find_current_lyrics_path().is_none()
+                                {
+                                    if let Some((_, song)) = ctx.find_current_song_in_queue() {
+                                        let sender = ctx.youtube_manager.sender();
+                                        let song = song.clone();
+                                        smol::spawn(async move {
+                                            let _ = sender
+                                                .send(
+                                                    crate::youtube::events::YouTubeEvent::GetLyrics(
+                                                        song,
+                                                    ),
+                                                )
+                                                .await;
+                                        })
+                                        .detach();
+                                    }
+                                }
                             }
 
                             ctx.last_status_update = Instant::now();
+                            if let Some(error) = &ctx.status.error {
+                                handle_playback_error(&ctx, &mut error_tracker, error);
+                            } else {
+                                error_tracker.clear();
+                            }
                             render_wanted = true;
                         }
                         (GLOBAL_VOLUME_UPDATE, None, MpdQueryResult::Volume(volume)) => {
@@ -562,11 +619,10 @@ fn main_task<B: Backend + std::io::Write>(
                             render_wanted = true;
                         }
                         (GLOBAL_QUEUE_UPDATE, None, MpdQueryResult::Queue(queue)) => {
-                            ctx.queue = queue.unwrap_or_default();
-                            ctx.cached_queue_time_total =
-                                ctx.queue.iter().filter_map(|s| s.duration).sum();
+                            ctx.update_queue(queue.unwrap_or_default());
                             render_wanted = true;
                             log::debug!(len = ctx.queue.len(); "Queue updated");
+
                             if let Err(err) = ui.on_event(UiEvent::QueueChanged, &mut ctx) {
                                 status_error!(error:? = err; "Ui failed to handle queue changed event, error: '{}'", err.to_status());
                             }
@@ -589,6 +645,16 @@ fn main_task<B: Backend + std::io::Write>(
                 },
                 AppEvent::WorkDone(Err(err)) => {
                     status_error!("{}", err);
+
+                    if let Some(mpd_err) = err.downcast_ref::<crate::mpd::errors::MpdError>() {
+                        if mpd_err.is_playback_error() {
+                            handle_playback_error(
+                                &ctx,
+                                &mut error_tracker,
+                                &mpd_err.detail_or_display(),
+                            );
+                        }
+                    }
                 }
                 AppEvent::Resized { columns, rows } => {
                     ctx.scheduler.schedule_replace(
@@ -663,6 +729,66 @@ fn main_task<B: Backend + std::io::Write>(
                             }
                         }
                     }
+                }
+                AppEvent::YouTube(event) => {
+                    match &event {
+                        crate::youtube::events::YouTubeEvent::MetadataAvailable(yt_track) => {
+                            for song in &mut ctx.queue {
+                                if song.youtube_id().as_ref() == Some(&yt_track.youtube_id) {
+                                    song.enrich_from_youtube(yt_track);
+                                }
+                            }
+                        }
+                        crate::youtube::events::YouTubeEvent::QueueUrl(url) => {
+                            if let Err(e) =
+                                ctx.work_sender.send(WorkRequest::Command(Command::AddYt {
+                                    url: url.clone(),
+                                    position: None,
+                                }))
+                            {
+                                log::error!("Failed to send AddYt command: {e}");
+                            }
+                            // Trigger immediate queue update after adding
+                            ctx.query()
+                                .id(GLOBAL_QUEUE_UPDATE)
+                                .replace_id("queue")
+                                .query(|client| Ok(MpdQueryResult::Queue(client.playlist_info()?)));
+                        }
+                        crate::youtube::events::YouTubeEvent::QueueUrlReplace {
+                            url,
+                            youtube_id,
+                            pos,
+                            play_after_replace,
+                        } => {
+                            if let Err(e) =
+                                ctx.work_sender.send(WorkRequest::Command(Command::ReplaceYt {
+                                    url: url.clone(),
+                                    youtube_id: youtube_id.clone(),
+                                    pos: *pos,
+                                    play: *play_after_replace,
+                                }))
+                            {
+                                log::error!("Failed to send ReplaceYt command: {e}");
+                            }
+                            // Trigger immediate queue update after replacement
+                            ctx.query()
+                                .id(GLOBAL_QUEUE_UPDATE)
+                                .replace_id("queue")
+                                .query(|client| Ok(MpdQueryResult::Queue(client.playlist_info()?)));
+                        }
+                        crate::youtube::events::YouTubeEvent::ClearQueue => {
+                            if let Err(e) =
+                                ctx.work_sender.send(WorkRequest::Command(Command::Clear))
+                            {
+                                log::error!("Failed to send Clear command: {e}");
+                            }
+                        }
+                        _ => {}
+                    }
+                    if let Err(err) = ui.on_event(UiEvent::YouTube(event), &mut ctx) {
+                        log::error!(error:? = err; "UI failed to handle youtube event");
+                    }
+                    render_wanted = true;
                 }
                 AppEvent::Reconnected => {
                     for ev in [IdleEvent::Player, IdleEvent::Playlist, IdleEvent::Options] {
@@ -820,4 +946,36 @@ fn handle_idle_event(event: IdleEvent, ctx: &Ctx, result_ui_evs: &mut HashSet<Id
     }
 
     result_ui_evs.insert(event);
+}
+
+fn handle_playback_error(ctx: &Ctx, error_tracker: &mut ErrorTracker, error: &str) {
+    if (error.contains("Failed to decode") || error.contains("403") || error.contains("404"))
+        && let Some(song) = ctx.find_failed_song_in_queue(error)
+        && error_tracker.should_handle(song.id, error)
+    {
+        log::warn!(
+            "Playback error for YouTube song {} (mpd_id: {}): {}",
+            song.youtube_id().as_ref().map_or("unknown", |id| id.as_str()),
+            song.id,
+            error
+        );
+
+        if let Some(yt_id) = song.youtube_id() {
+            let sender = ctx.youtube_manager.sender();
+            let yt_id = yt_id.to_string();
+            let pos = ctx.song_position(song.id).map(|p| p as u32);
+            let error = error.to_string();
+            smol::spawn(async move {
+                let _ = sender
+                    .send(crate::youtube::events::YouTubeEvent::PlaybackError {
+                        youtube_id: yt_id,
+                        pos,
+                        _message: error,
+                        play_after_refresh: true,
+                    })
+                    .await;
+            })
+            .detach();
+        }
+    }
 }

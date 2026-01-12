@@ -24,6 +24,7 @@ pub struct CliConfig {
     pub password: Option<MpdPassword>,
     pub cache_dir: Option<PathBuf>,
     pub lyrics_dir: Option<String>,
+    pub youtube_db_path: Option<PathBuf>,
 }
 
 impl From<ConfigFile> for CliConfigFile {
@@ -44,6 +45,7 @@ impl From<Config> for CliConfig {
             password: value.password,
             cache_dir: value.cache_dir,
             lyrics_dir: value.lyrics_dir,
+            youtube_db_path: None,
         }
     }
 }
@@ -55,6 +57,7 @@ impl From<&Config> for CliConfig {
             password: value.password.clone(),
             cache_dir: value.cache_dir.clone(),
             lyrics_dir: value.lyrics_dir.clone(),
+            youtube_db_path: None,
         }
     }
 }
@@ -84,6 +87,7 @@ impl CliConfigFile {
             }),
             address,
             password,
+            youtube_db_path: None,
         }
     }
 }

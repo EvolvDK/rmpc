@@ -3,8 +3,7 @@ use std::{fmt::Display, str::FromStr};
 use crossterm::event::{KeyCode, KeyEvent as CKeyEvent, KeyModifiers};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use winnow::{
-    Parser,
-    Result,
+    Parser, Result,
     combinator::{alt, dispatch, empty, fail, opt, permutation, repeat, seq, trace},
     token::{any, literal},
 };

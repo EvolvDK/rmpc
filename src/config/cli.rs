@@ -235,6 +235,14 @@ pub enum Command {
         #[arg(short, long, allow_negative_numbers = true)]
         position: Option<QueuePosition>,
     },
+    #[clap(hide = true)]
+    ReplaceYt {
+        url: String,
+        youtube_id: String,
+        pos: Option<u32>,
+        #[arg(long)]
+        play: bool,
+    },
     /// Search and add the first match to the current queue (youTube by
     /// default).
     SearchYt {
@@ -329,6 +337,18 @@ pub enum Command {
         channel: String,
         content: String,
     },
+    /// Import tracks from Google Takeout Music Library CSV
+    ImportLibrary {
+        /// Path to the CSV file
+        path: String,
+    },
+    /// Import playlists from Google Takeout playlist folder
+    ImportPlaylists {
+        /// Path to the folder containing playlist JSON/CSV files
+        path: String,
+    },
+    /// Download lyrics for the current song
+    GetLyrics,
 }
 
 #[derive(Subcommand, Clone, Debug, PartialEq, strum::EnumDiscriminants, strum::Display)]

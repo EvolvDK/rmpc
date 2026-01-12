@@ -28,6 +28,7 @@ use crate::{
 pub trait DirStackItem {
     fn as_path(&self) -> &str;
     fn is_file(&self) -> bool;
+    fn as_song(&self) -> Option<&Song>;
     fn to_file_preview(&self, ctx: &Ctx) -> Vec<PreviewGroup>;
     fn matches(&self, song_format: &[Property<SongProperty>], ctx: &Ctx, filter: &str) -> bool;
     fn to_list_item<'a>(
@@ -54,6 +55,13 @@ impl DirStackItem for DirOrSong {
         match self {
             DirOrSong::Dir { .. } => false,
             DirOrSong::Song(_) => true,
+        }
+    }
+
+    fn as_song(&self) -> Option<&Song> {
+        match self {
+            DirOrSong::Dir { .. } => None,
+            DirOrSong::Song(s) => Some(s),
         }
     }
 
@@ -135,6 +143,10 @@ impl DirStackItem for Song {
 
     fn is_file(&self) -> bool {
         true
+    }
+
+    fn as_song(&self) -> Option<&Song> {
+        Some(self)
     }
 
     fn to_file_preview(&self, ctx: &Ctx) -> Vec<PreviewGroup> {
@@ -245,6 +257,10 @@ impl DirStackItem for String {
 
     fn is_file(&self) -> bool {
         true
+    }
+
+    fn as_song(&self) -> Option<&Song> {
+        None
     }
 
     fn to_file_preview(&self, _ctx: &Ctx) -> Vec<PreviewGroup> {

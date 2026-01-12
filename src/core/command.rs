@@ -24,12 +24,14 @@ use crate::{
         mpd_client_ext::MpdClientExt,
         ytdlp::{self, YtDlp, YtDlpHost},
     },
+    youtube::{manager::YouTubeManager, models::YouTubeId},
 };
 
 impl Command {
     pub fn execute(
         mut self,
         config: &CliConfig,
+        youtube_manager: Option<Arc<YouTubeManager>>,
     ) -> Result<Box<dyn FnOnce(&mut Client<'_>) -> Result<()> + Send + 'static>> {
         match self {
             Command::Config { .. } => bail!("Cannot use config command here."),
@@ -100,15 +102,19 @@ impl Command {
                     Ok(())
                 }))
             }
-            Command::Queue => Ok(Box::new(|client| {
-                let queue = client.playlist_info()?;
-                if let Some(queue) = queue {
+            Command::Queue => {
+                let db_path = config.youtube_db_path.clone();
+                Ok(Box::new(move |client| {
+                    let mut queue = client.playlist_info()?.unwrap_or_default();
+                    if let Some(yt_manager) = youtube_manager {
+                        yt_manager.enrich_songs(&mut queue);
+                    } else if let Some(db_path) = db_path {
+                        crate::youtube::enrich_songs_from_db(&mut queue, &db_path);
+                    }
                     println!("{}", serde_json::ser::to_string(&queue)?);
                     Ok(())
-                } else {
-                    std::process::exit(1);
-                }
-            })),
+                }))
+            }
             Command::ListAll { files } => Ok(Box::new(|client| {
                 let result = if files.is_empty() {
                     client.list_all(None)?
@@ -277,6 +283,13 @@ impl Command {
                 Ok(())
             })),
             Command::AddYt { url, position } => {
+                if crate::youtube::models::extract_youtube_id(&url).is_some() {
+                    return Ok(Box::new(move |client| {
+                        client.add(&url, position)?;
+                        Ok(())
+                    }));
+                }
+
                 let config = config.clone();
                 Ok(Box::new(move |client| {
                     // Idle with message subsystem, the cli client is never subscribed to any
@@ -300,6 +313,61 @@ impl Command {
                     Ok(())
                 }))
             }
+            Command::ReplaceYt { url, youtube_id, pos, play } => {
+                Ok(Box::new(move |client| {
+                    let queue = client.playlist_info()?.unwrap_or_default();
+
+                    // Strategy:
+                    // 1. Try to find song at suggested 'pos' (if matches youtube_id)
+                    // 2. Fallback: Find first occurrence of youtube_id in queue
+
+                    let target_pos = if let Some(pos) = pos
+                        && let Some(song) = queue.get(pos as usize)
+                        && song.youtube_id().as_ref() == Some(&YouTubeId::new(&youtube_id))
+                    {
+                        Some(pos)
+                    } else {
+                        queue
+                            .iter()
+                            .position(|s| {
+                                s.youtube_id().as_ref() == Some(&YouTubeId::new(&youtube_id))
+                            })
+                            .map(|i| i as u32)
+                    };
+
+                    if let Some(pos) = target_pos {
+                        if let Some(song) = queue.get(pos as usize) {
+                            // Idempotency check: if already valid (fresh), skip replacement
+                            if !song.is_youtube_expired() {
+                                log::info!(
+                                    "Song {youtube_id} at pos {pos} is already refreshed, skipping replacement."
+                                );
+                                return Ok(());
+                            }
+
+                            log::info!("Replacing expired YouTube song {youtube_id} at pos {pos}");
+                            // Add new URL at the same position. This shifts the old song to pos + 1.
+                            client.add(
+                                &url,
+                                Some(QueuePosition::Absolute(
+                                    pos.try_into().expect("pos to fit in u32"),
+                                )),
+                            )?;
+
+                            // Delete the old song using its stable ID to avoid race conditions.
+                            client.delete_id(song.id)?;
+
+                            if play {
+                                client.play_pos(pos.try_into().expect("pos to fit in u32"))?;
+                            }
+                        }
+                    } else {
+                        log::warn!("Could not find song {youtube_id} to replace. Skipping.");
+                        // Do NOT add to end of queue to avoid duplication loop
+                    }
+                    Ok(())
+                }))
+            }
             Command::SearchYt { query, provider, interactive, limit, position } => {
                 let kind: YtDlpHost = provider.into();
                 let chosen_url = if interactive {
@@ -311,7 +379,6 @@ impl Command {
                         .ok_or_else(|| anyhow::anyhow!("No results found for query '{query}'"))
                         .map(|item| item.url)?
                 };
-
                 let config = config.clone();
                 Ok(Box::new(move |client| {
                     // Idle with message subsystem, the cli client is never subscribed to any
@@ -368,9 +435,20 @@ impl Command {
                 Ok(())
             })),
             Command::Song { path: Some(paths) } if paths.len() == 1 => {
+                let db_path = config.youtube_db_path.clone();
                 Ok(Box::new(move |client| {
                     let path = &paths[0];
-                    if let Some(song) = client.find_one(&[Filter::new(Tag::File, path.as_str())])? {
+                    if let Some(mut song) =
+                        client.find_one(&[Filter::new(Tag::File, path.as_str())])?
+                    {
+                        if let Some(yt_manager) = youtube_manager {
+                            yt_manager.enrich_song(&mut song);
+                        } else if let Some(db_path) = &db_path {
+                            crate::youtube::enrich_songs_from_db(
+                                std::slice::from_mut(&mut song),
+                                db_path,
+                            );
+                        }
                         println!("{}", serde_json::ser::to_string(&song)?);
                         Ok(())
                     } else {
@@ -379,28 +457,52 @@ impl Command {
                     }
                 }))
             }
-            Command::Song { path: Some(paths) } => Ok(Box::new(move |client| {
-                let mut songs = Vec::new();
-                for path in &paths {
-                    if let Some(song) = client.find_one(&[Filter::new(Tag::File, path.as_str())])? {
-                        songs.push(song);
+            Command::Song { path: Some(paths) } => {
+                let db_path = config.youtube_db_path.clone();
+                Ok(Box::new(move |client| {
+                    let mut songs = Vec::new();
+
+                    for path in &paths {
+                        if let Some(song) =
+                            client.find_one(&[Filter::new(Tag::File, path.as_str())])?
+                        {
+                            songs.push(song);
+                        } else {
+                            println!("Song with path '{path}' not found.");
+                            std::process::exit(1);
+                        }
+                    }
+
+                    if let Some(yt_manager) = &youtube_manager {
+                        yt_manager.enrich_songs(&mut songs);
+                    } else if let Some(db_path) = &db_path {
+                        crate::youtube::enrich_songs_from_db(&mut songs, db_path);
+                    }
+
+                    println!("{}", serde_json::ser::to_string(&songs)?);
+                    Ok(())
+                }))
+            }
+            Command::Song { path: None } => {
+                let db_path = config.youtube_db_path.clone();
+                Ok(Box::new(move |client| {
+                    let current_song = client.get_current_song()?;
+                    if let Some(mut song) = current_song {
+                        if let Some(yt_manager) = youtube_manager {
+                            yt_manager.enrich_song(&mut song);
+                        } else if let Some(db_path) = &db_path {
+                            crate::youtube::enrich_songs_from_db(
+                                std::slice::from_mut(&mut song),
+                                db_path,
+                            );
+                        }
+                        println!("{}", serde_json::ser::to_string(&song)?);
+                        Ok(())
                     } else {
-                        println!("Song with path '{path}' not found.");
                         std::process::exit(1);
                     }
-                }
-                println!("{}", serde_json::ser::to_string(&songs)?);
-                Ok(())
-            })),
-            Command::Song { path: None } => Ok(Box::new(|client| {
-                let current_song = client.get_current_song()?;
-                if let Some(song) = current_song {
-                    println!("{}", serde_json::ser::to_string(&song)?);
-                    Ok(())
-                } else {
-                    std::process::exit(1);
-                }
-            })),
+                }))
+            }
             Command::Mount { name, path } => {
                 Ok(Box::new(move |client| Ok(client.mount(&name, &path)?)))
             }
@@ -481,6 +583,28 @@ impl Command {
             }
             Command::SendMessage { channel, content } => Ok(Box::new(move |client| {
                 client.send_message(&channel, &content)?;
+                Ok(())
+            })),
+            Command::ImportLibrary { path } => {
+                Ok(Box::new(move |_client| {
+                    // We need a way to send events to youtube_manager from here.
+                    // Command::execute returns a Boxed closure that takes &mut Client.
+                    // This is used by CliConfig::execute_command which has access to Ctx if available.
+                    // But here it's more for CLI standalone.
+                    // Actually, Command::execute is also used by main.rs when running CLI commands.
+                    log::info!("Importing library from {path}");
+                    // This will be handled in main.rs or where Command::execute is called if Ctx is present.
+                    Ok(())
+                }))
+            }
+            Command::ImportPlaylists { path } => Ok(Box::new(move |_client| {
+                log::info!("Importing playlists from {path}");
+                Ok(())
+            })),
+            Command::GetLyrics => Ok(Box::new(|_client| {
+                // In TUI, this is handled specifically in ui/mod.rs to use YouTubeManager.
+                // In standalone CLI, we could implement it here if needed,
+                // but it requires a lot of dependencies (yt-dlp, curl).
                 Ok(())
             })),
         }

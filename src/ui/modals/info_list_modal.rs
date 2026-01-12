@@ -25,6 +25,7 @@ use crate::{
         mouse_event::{MouseEvent, MouseEventKind},
     },
     ui::dirstack::DirState,
+    youtube::models::YouTubeTrack,
 };
 
 #[derive(Debug)]
@@ -234,6 +235,7 @@ impl Modal for InfoListModal {
                 ctx.render()?;
             }
             MouseEventKind::Drag { drag_start_position: _ } => {}
+            MouseEventKind::Release => {}
         }
 
         Ok(())
@@ -247,13 +249,13 @@ impl From<Vec<Song>> for KeyValues {
         let total_duration: Duration = value.iter().filter_map(|v| v.duration).sum();
         let total_artists = value
             .iter()
-            .filter_map(|v| v.metadata.get("artist"))
+            .filter_map(|v| v.metadata.get(Song::ARTIST))
             .flat_map(|tag| tag.iter())
             .unique()
             .count();
         let total_albums = value
             .iter()
-            .filter_map(|v| v.metadata.get("album"))
+            .filter_map(|v| v.metadata.get(Song::ALBUM))
             .flat_map(|tag| tag.iter())
             .unique()
             .count();
@@ -278,12 +280,21 @@ impl From<&Song> for KeyValues {
     fn from(song: &Song) -> Self {
         let mut result = Vec::new();
         result.push(KeyValue { key: "File".to_owned(), value: song.file.clone() });
+        result.push(KeyValue { key: "MPD ID".to_owned(), value: song.id.to_string() });
         let file_name = song.file_name().unwrap_or_default();
         if !file_name.is_empty() {
             result.push(KeyValue { key: "Filename".to_owned(), value: file_name.into_owned() });
         }
 
-        if let Some(title) = song.metadata.get("title") {
+        if let Some(yt_id) = song.youtube_id() {
+            result.push(KeyValue { key: "YouTube ID".to_owned(), value: yt_id.to_string() });
+            // In a real scenario we'd need Ctx to get cached metadata,
+            // but From<&Song> doesn't have access to Ctx.
+            // However, the Song object for YouTube tracks already has some metadata
+            // if it was converted from YouTubeTrack in MPD commands.
+        }
+
+        if let Some(title) = song.metadata.get(Song::TITLE) {
             result.extend(
                 title
                     .iter()
@@ -291,7 +302,7 @@ impl From<&Song> for KeyValues {
             );
         }
 
-        if let Some(artist) = song.metadata.get("artist") {
+        if let Some(artist) = song.metadata.get(Song::ARTIST) {
             result.extend(
                 artist
                     .iter()
@@ -299,7 +310,7 @@ impl From<&Song> for KeyValues {
             );
         }
 
-        if let Some(album) = song.metadata.get("album") {
+        if let Some(album) = song.metadata.get(Song::ALBUM) {
             result.extend(
                 album
                     .iter()
@@ -307,7 +318,7 @@ impl From<&Song> for KeyValues {
             );
         }
 
-        let duration = song.duration.as_ref().map(|d| d.as_secs().to_string()).unwrap_or_default();
+        let duration = song.duration.as_ref().map(|d| d.to_string()).unwrap_or_default();
         if !duration.is_empty() {
             result.push(KeyValue { key: "Duration".to_owned(), value: duration });
         }
@@ -316,12 +327,56 @@ impl From<&Song> for KeyValues {
             song.metadata
                 .iter()
                 .filter(|(key, _)| {
-                    !["title", "album", "artist", "duration"].contains(&(*key).as_str())
+                    ![Song::TITLE, Song::ALBUM, Song::ARTIST, "duration"].contains(&(*key).as_str())
                 })
                 .flat_map(|(k, v)| {
                     v.iter().map(|item| KeyValue { key: k.to_owned(), value: item.to_owned() })
                 }),
         );
+
+        KeyValues(result)
+    }
+}
+
+impl From<&YouTubeTrack> for KeyValues {
+    fn from(track: &YouTubeTrack) -> Self {
+        Self::from_youtube(track, None, None, None)
+    }
+}
+
+impl KeyValues {
+    pub fn from_youtube(
+        track: &YouTubeTrack,
+        mpd_id: Option<u32>,
+        pos: Option<u32>,
+        file: Option<String>,
+    ) -> Self {
+        let mut result = Vec::new();
+        if let Some(mpd_id) = mpd_id {
+            result.push(KeyValue { key: "MPD ID".to_owned(), value: mpd_id.to_string() });
+        }
+        if let Some(pos) = pos {
+            result.push(KeyValue { key: "Pos".to_owned(), value: pos.to_string() });
+        }
+        if let Some(file) = file {
+            result.push(KeyValue { key: "File".to_owned(), value: file });
+        }
+        result.push(KeyValue { key: "YouTube ID".to_owned(), value: track.youtube_id.to_string() });
+        result.push(KeyValue { key: "Title".to_owned(), value: track.title.clone() });
+        result.push(KeyValue { key: "Artist".to_owned(), value: track.artist.clone() });
+        if let Some(album) = &track.album {
+            result.push(KeyValue { key: "Album".to_owned(), value: album.clone() });
+        }
+        result.push(KeyValue { key: "Duration".to_owned(), value: track.duration.to_string() });
+        result.push(KeyValue { key: "Link".to_owned(), value: track.link.clone() });
+        if let Some(thumb) = &track.thumbnail_url {
+            result.push(KeyValue { key: "Thumbnail".to_owned(), value: thumb.clone() });
+        }
+        result.push(KeyValue { key: "Added".to_owned(), value: track.added_at.to_rfc3339() });
+        result.push(KeyValue {
+            key: "Last Modified".to_owned(),
+            value: track.last_modified_at.to_rfc3339(),
+        });
 
         KeyValues(result)
     }

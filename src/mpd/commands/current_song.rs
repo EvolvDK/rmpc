@@ -7,6 +7,8 @@ use serde::Serialize;
 use super::metadata_tag::MetadataTag;
 use crate::mpd::{FromMpd, LineHandled, ParseErrorExt, errors::MpdError};
 
+use crate::youtube::models::{YouTubeId, YouTubeTrack};
+
 #[derive(Default, Serialize, PartialEq, Eq, Clone)]
 pub struct Song {
     pub id: u32,
@@ -18,7 +20,31 @@ pub struct Song {
     pub added: Option<DateTime<Utc>>,
 }
 
+impl From<YouTubeTrack> for Song {
+    fn from(yt: YouTubeTrack) -> Self {
+        let mut metadata = HashMap::new();
+        metadata.insert(Song::TITLE.to_string(), MetadataTag::Single(yt.title));
+        metadata.insert(Song::ARTIST.to_string(), MetadataTag::Single(yt.artist));
+        if let Some(album) = yt.album {
+            metadata.insert(Song::ALBUM.to_string(), MetadataTag::Single(album));
+        }
+
+        Song {
+            file: yt.youtube_id.append_to_url(&yt.link),
+            metadata,
+            duration: Some(yt.duration),
+            id: 0,
+            last_modified: yt.last_modified_at,
+            added: Some(yt.added_at),
+        }
+    }
+}
+
 impl Song {
+    pub const TITLE: &'static str = "title";
+    pub const ARTIST: &'static str = "artist";
+    pub const ALBUM: &'static str = "album";
+
     pub fn samplerate(&self) -> Option<u32> {
         self.metadata.get("format").and_then(|audio| {
             audio.first().split(':').next().and_then(|rate_str| rate_str.parse().ok())
@@ -35,6 +61,38 @@ impl Song {
         self.metadata.get("format").and_then(|audio| {
             audio.first().split(':').nth(2).and_then(|channels_str| channels_str.parse().ok())
         })
+    }
+
+    pub fn is_youtube(&self) -> bool {
+        self.file.contains("videoplayback") || self.file.contains("googlevideo.com")
+    }
+
+    pub fn youtube_id(&self) -> Option<YouTubeId> {
+        YouTubeId::from_url(&self.file)
+    }
+
+    pub fn youtube_expiry(&self) -> Option<u64> {
+        crate::youtube::cache::get_youtube_expiry(&self.file)
+    }
+
+    pub fn is_youtube_expired(&self) -> bool {
+        crate::youtube::cache::is_youtube_url_expired(&self.file) && self.is_youtube()
+    }
+
+    pub fn enrich_from_youtube(&mut self, yt: &YouTubeTrack) {
+        if self.metadata.is_empty()
+            || !self.metadata.contains_key(Self::TITLE)
+            || !self.metadata.contains_key(Self::ARTIST)
+        {
+            self.metadata.insert(Self::TITLE.to_string(), MetadataTag::Single(yt.title.clone()));
+            self.metadata.insert(Self::ARTIST.to_string(), MetadataTag::Single(yt.artist.clone()));
+            if let Some(album) = &yt.album {
+                self.metadata.insert(Self::ALBUM.to_string(), MetadataTag::Single(album.clone()));
+            }
+        }
+        if self.duration.is_none() || self.duration == Some(Duration::ZERO) {
+            self.duration = Some(yt.duration);
+        }
     }
 }
 
@@ -57,6 +115,7 @@ impl FromMpd for Song {
         match key {
             "file" => self.file = value,
             "id" => self.id = value.parse().logerr(key, &value)?,
+            "pos" => {} // Ignored
             "duration" => {
                 self.duration = Some(Duration::from_secs_f64(value.parse().logerr(key, &value)?));
             }

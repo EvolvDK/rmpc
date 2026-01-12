@@ -41,6 +41,12 @@ impl KeyTreeNode {
         }
 
         if matches!(mode, InputModeDiscriminants::Normal) {
+            for seq in &cfg.youtube {
+                root.insert(&seq.0.0, Actions::Youtube(*seq.1));
+            }
+        }
+
+        if matches!(mode, InputModeDiscriminants::Normal) {
             #[cfg(debug_assertions)]
             for seq in &cfg.logs {
                 root.insert(&seq.0.0, Actions::Logs(*seq.1));

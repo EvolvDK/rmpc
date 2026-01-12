@@ -439,6 +439,7 @@ impl Modal for KeybindsModal {
                 ctx.render()?;
             }
             MouseEventKind::Drag { drag_start_position: _ } => {}
+            MouseEventKind::Release => {}
         }
 
         Ok(())

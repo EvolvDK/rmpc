@@ -101,6 +101,7 @@ pub enum PaneTypeFile {
         separator: Option<String>,
     },
     Cava,
+    Youtube,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, strum::Display, strum::EnumDiscriminants)]
@@ -137,6 +138,7 @@ pub enum PaneType {
         separator: Option<String>,
     },
     Cava,
+    Youtube,
 }
 
 pub const PANES_ALLOWED_IN_BOTH_TAB_AND_LAYOUT: [PaneTypeDiscriminants; 1] =
@@ -219,6 +221,7 @@ impl TryFrom<PaneTypeFile> for PaneType {
                 PaneType::Browser { root_tag: tag, separator }
             }
             PaneTypeFile::Cava => PaneType::Cava,
+            PaneTypeFile::Youtube => PaneType::Youtube,
         })
     }
 }
@@ -979,6 +982,11 @@ impl Default for TabsFile {
                         pane: PaneOrSplitFile::Pane(PaneTypeFile::Search),
                     }],
                 },
+            },
+            TabFile {
+                name: "YouTube".to_string(),
+                border_type: BorderTypeFile::None,
+                pane: PaneOrSplitFile::Pane(PaneTypeFile::Youtube),
             },
         ])
     }

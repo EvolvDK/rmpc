@@ -12,8 +12,7 @@ use super::{
 };
 use crate::{
     config::{
-        Config,
-        Size,
+        Config, Size,
         cli::{Command, RemoteCommandQuery},
         keys::Key,
         tabs::PaneType,
@@ -153,6 +152,7 @@ pub(crate) enum AppEvent {
         stream: IpcStream,
         targets: Vec<RemoteCommandQuery>,
     },
+    YouTube(crate::youtube::events::YouTubeEvent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Copy, Eq, Hash, PartialEq)]

@@ -48,6 +48,7 @@ mod ctx;
 mod mpd;
 mod shared;
 mod ui;
+mod youtube;
 
 fn main() -> Result<()> {
     let mut args = Args::parse();
@@ -272,8 +273,10 @@ fn main() -> Result<()> {
                     ConfigFile::default().into()
                 }
             };
-            let config = config.into_config(args.address, args.password);
-            let result = cmd.execute(&config)?;
+            let mut config = config.into_config(args.address, args.password);
+            config.youtube_db_path =
+                Some(config_path.parent().unwrap_or(&config_path).join("youtube.db"));
+            let result = cmd.execute(&config, None)?;
             let mut client = Client::init(
                 config.address.clone(),
                 config.password.clone(),
@@ -360,6 +363,8 @@ fn main() -> Result<()> {
 
             let tx_clone = event_tx.clone();
 
+            let db_path = config_path.parent().unwrap_or(&config_path).join("youtube.db");
+
             let ctx = Ctx::try_new(
                 &mut client,
                 config,
@@ -367,8 +372,20 @@ fn main() -> Result<()> {
                 worker_tx.clone(),
                 client_tx.clone(),
                 Scheduler::new((event_tx.clone(), client_tx.clone())),
+                &db_path,
             )
             .context("Failed to create app context")?;
+
+            ctx.youtube_manager.start();
+
+            let youtube_rx = ctx.youtube_manager.receiver();
+            let event_tx_bridge = event_tx.clone();
+            smol::spawn(async move {
+                while let Ok(event) = youtube_rx.recv().await {
+                    let _ = event_tx_bridge.send(AppEvent::YouTube(event));
+                }
+            })
+            .detach();
 
             core::client::init(
                 client_rx.clone(),
@@ -381,6 +398,7 @@ fn main() -> Result<()> {
                 client_tx.clone(),
                 event_tx.clone(),
                 Arc::clone(&ctx.config),
+                Arc::clone(&ctx.youtube_manager),
             )?;
             let _sock_guard =
                 core::socket::init(event_tx.clone(), worker_tx.clone(), Arc::clone(&ctx.config))

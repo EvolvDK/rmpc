@@ -10,10 +10,7 @@ use super::Pane;
 use crate::{
     ctx::Ctx,
     shared::{
-        ext::duration::DurationExt,
-        keys::ActionEvent,
-        lrc::Lrc,
-        macros::status_error,
+        ext::duration::DurationExt, keys::ActionEvent, lrc::Lrc, macros::status_error,
         mpd_query::run_status_update,
     },
     ui::UiEvent,

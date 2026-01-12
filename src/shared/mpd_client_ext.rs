@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -12,13 +12,42 @@ use crate::{
     ctx::Ctx,
     mpd::{
         QueuePosition,
-        commands::{IdleEvent, State, Status, outputs::Outputs, stickers::Stickers},
+        commands::{IdleEvent, Song, State, Status, outputs::Outputs, stickers::Stickers},
         errors::{ErrorCode, MpdError, MpdFailureResponse},
         mpd_client::{Filter, FilterKind, MpdClient, MpdCommand, SingleOrRange, Tag},
         proto_client::ProtoClient,
     },
     shared::macros::{status_info, status_warn},
+    youtube::models::YouTubeId,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum TrackIdentifier {
+    /// Local file path
+    File(String),
+    /// `YouTube` video ID (canonical identifier)
+    YouTube(YouTubeId),
+}
+
+impl TrackIdentifier {
+    /// Extract the canonical identifier from a Song
+    fn from_song(song: &Song) -> Self {
+        if let Some(yt_id) = song.youtube_id() {
+            TrackIdentifier::YouTube(yt_id)
+        } else {
+            TrackIdentifier::File(song.file.clone())
+        }
+    }
+
+    /// Extract the canonical identifier from a file path/URL
+    fn from_path(path: &str) -> Self {
+        if let Some(yt_id) = YouTubeId::from_url(path) {
+            TrackIdentifier::YouTube(yt_id)
+        } else {
+            TrackIdentifier::File(path.to_string())
+        }
+    }
+}
 
 pub trait MpdClientExt {
     fn resolve_and_enqueue(
@@ -30,8 +59,7 @@ pub trait MpdClientExt {
         hovered_song_idx: Option<usize>,
     ) {
         let opts = AddOpts { autoplay, position, all: false };
-        let replace = matches!(position, Position::Replace);
-        let (autoplay_idx, position) = match opts.autoplay_idx_and_queue_position(
+        let (autoplay_idx, queue_position) = match opts.autoplay_idx_and_queue_position(
             &ctx.queue,
             current_song_idx,
             hovered_song_idx,
@@ -42,11 +70,66 @@ pub trait MpdClientExt {
                 return;
             }
         };
+        let replace = matches!(position, Position::Replace);
 
-        ctx.command(move |client| {
-            client.enqueue_multiple(items, autoplay_idx, position, replace)?;
-            Ok(())
-        });
+        let has_youtube = items.iter().any(|item| item.is_youtube());
+
+        if !has_youtube {
+            ctx.command(move |client| {
+                client.enqueue_multiple(items, autoplay_idx, queue_position, replace)?;
+                Ok(())
+            });
+            return;
+        }
+
+        let youtube_manager = Arc::clone(&ctx.youtube_manager);
+        let client_request_sender = ctx.client_request_sender.clone();
+
+        smol::spawn(async move {
+            let mut resolved_items = Vec::with_capacity(items.len());
+            for item in items {
+                if item.is_youtube() {
+                    match item {
+                        Enqueue::File { path } => {
+                            if let Some(youtube_id) =
+                                crate::youtube::models::YouTubeId::from_url(&path)
+                            {
+                                match youtube_manager.resolve_url(&youtube_id).await {
+                                    Ok(url) => {
+                                        resolved_items.push(Enqueue::File {
+                                            path: youtube_id.append_to_url(&url),
+                                        });
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        log::error!("{e:?}");
+                                    }
+                                }
+                            }
+                            resolved_items.push(Enqueue::File { path });
+                        }
+                        _ => resolved_items.push(item),
+                    }
+                } else {
+                    resolved_items.push(item);
+                }
+            }
+
+            let _ = client_request_sender.send(crate::shared::events::ClientRequest::Command(
+                crate::shared::mpd_query::MpdCommand {
+                    callback: Box::new(move |client| {
+                        client.enqueue_multiple(
+                            resolved_items,
+                            autoplay_idx,
+                            queue_position,
+                            replace,
+                        )?;
+                        Ok(())
+                    }),
+                },
+            ));
+        })
+        .detach();
     }
     fn play_position_safe(&mut self, queue_len: usize) -> Result<(), MpdError>;
     fn enqueue_multiple(
@@ -102,6 +185,17 @@ pub enum Enqueue {
     Find { filter: Vec<(Tag, FilterKind, String)> },
 }
 
+impl Enqueue {
+    pub fn is_youtube(&self) -> bool {
+        match self {
+            Enqueue::File { path } => {
+                path.contains("videoplayback") || path.contains("googlevideo.com")
+            }
+            _ => false,
+        }
+    }
+}
+
 impl<T: MpdClient + MpdCommand + ProtoClient> MpdClientExt for T {
     fn play_position_safe(&mut self, queue_len: usize) -> Result<(), MpdError> {
         match self.play_pos(queue_len) {
@@ -129,6 +223,32 @@ impl<T: MpdClient + MpdCommand + ProtoClient> MpdClientExt for T {
         if items.is_empty() {
             return Ok(());
         }
+
+        // Deduplication using canonical identifiers
+        let current_queue = self.playlist_info()?.unwrap_or_default();
+        let existing_tracks: HashSet<TrackIdentifier> =
+            current_queue.iter().map(TrackIdentifier::from_song).collect();
+
+        let original_len = items.len();
+        if !replace {
+            items.retain(|item| {
+                let identifier = match item {
+                    Enqueue::File { path } => TrackIdentifier::from_path(path),
+                    _ => return true, // Non-file items always pass through
+                };
+
+                !existing_tracks.contains(&identifier)
+            });
+        }
+
+        let skipped = original_len - items.len();
+        if items.is_empty() {
+            if skipped > 0 {
+                status_info!("Skipped {} duplicate(s)", skipped);
+            }
+            return Ok(());
+        }
+
         let should_reverse = match position {
             Some(QueuePosition::RelativeAdd(_)) => true,
             Some(QueuePosition::RelativeSub(_)) => false,
@@ -161,7 +281,10 @@ impl<T: MpdClient + MpdCommand + ProtoClient> MpdClientExt for T {
         }
         self.send_execute_cmd_list()?;
         self.read_ok()?;
-        if items_len == 1 {
+
+        if skipped > 0 {
+            status_info!("Added {} item(s) to queue, skipped {} duplicate(s)", items_len, skipped);
+        } else if items_len == 1 {
             status_info!("Added 1 item to the queue");
         } else {
             status_info!("Added {items_len} items to the queue");

@@ -3,12 +3,8 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, anyhow};
 use itertools::Itertools;
 use modals::{
-    add_random_modal::AddRandomModal,
-    decoders::DecodersModal,
-    info_list_modal::InfoListModal,
-    input_modal::InputModal,
-    keybinds::KeybindsModal,
-    menu::modal::MenuModal,
+    add_random_modal::AddRandomModal, decoders::DecodersModal, info_list_modal::InfoListModal,
+    input_modal::InputModal, keybinds::KeybindsModal, menu::modal::MenuModal,
     outputs::OutputsModal,
 };
 use panes::{PaneContainer, Panes, pane_call};
@@ -56,6 +52,7 @@ use crate::{
         input::{InputEvent, InputResultEvent},
         modals::{downloads::DownloadsModal, menu::create_rating_modal},
     },
+    youtube::events::YouTubeEvent,
 };
 
 pub mod browser;
@@ -388,6 +385,19 @@ impl<'ui> Ui<'ui> {
                                         Err(err) => {
                                             status_error!(err:?; "Failed to queue yt-dlp download");
                                         }
+                                    }
+                                    Ok(())
+                                }
+
+                                Ok(Args { command: Some(Command::GetLyrics), .. }) => {
+                                    if let Some((_, song)) = ctx.find_current_song_in_queue() {
+                                        let sender = ctx.youtube_manager.sender();
+                                        let song = song.clone();
+                                        smol::spawn(async move {
+                                            let _ =
+                                                sender.send(YouTubeEvent::GetLyrics(song)).await;
+                                        })
+                                        .detach();
                                     }
                                     Ok(())
                                 }
@@ -926,6 +936,7 @@ impl<'ui> Ui<'ui> {
                 Panes::FrameCount(p) => p.on_event(&mut event, visible, ctx),
                 Panes::Others(p) => p.on_event(&mut event, visible, ctx),
                 Panes::Cava(p) => p.on_event(&mut event, visible, ctx),
+                Panes::Youtube(p) => p.on_event(&mut event, visible, ctx),
                 // Property and the dummy TabContent pane do not need to receive events
                 Panes::Property(_) | Panes::TabContent => Ok(()),
             }?;
@@ -972,6 +983,7 @@ impl<'ui> Ui<'ui> {
                     #[cfg(debug_assertions)]
                     Panes::FrameCount(p) => p.on_query_finished(id, data, visible, ctx),
                     Panes::Cava(p) => p.on_query_finished(id, data, visible, ctx),
+                    Panes::Youtube(p) => p.on_query_finished(id, data, visible, ctx),
                     // Property and the dummy TabContent pane do not need to receive command
                     // notifications
                     Panes::Property(_) | Panes::TabContent => Ok(()),
@@ -1033,6 +1045,8 @@ pub enum UiEvent {
     Hidden,
     ConfigChanged,
     PlaybackStateChanged,
+    YouTube(crate::youtube::events::YouTubeEvent),
+    UserKeyInput(crossterm::event::KeyEvent),
     ImageEncoded { data: EncodeData },
     ImageEncodeFailed { err: anyhow::Error },
     DownloadsUpdated,

@@ -425,8 +425,13 @@ pub fn add_to_playlist_or_show_modal(
 ) {
     let pl_name = playlist_name.clone();
     let songs_in_playlist = match ctx.query_sync(move |client| {
-        let pl: HashSet<_> =
-            client.list_playlist_info(&pl_name, None)?.into_iter().map(|s| s.file).collect();
+        let mut pl = HashSet::new();
+        for s in client.list_playlist_info(&pl_name, None)? {
+            if let Some(yt_id) = s.youtube_id() {
+                pl.insert(yt_id);
+            }
+            pl.insert(crate::youtube::models::YouTubeId::new(s.file));
+        }
         Ok(pl)
     }) {
         Ok(v) => v,
@@ -437,14 +442,35 @@ pub fn add_to_playlist_or_show_modal(
     };
 
     let (duplicate_songs, non_duplicate_songs): (Vec<_>, Vec<_>) =
-        all_songs.iter().cloned().partition(|s| songs_in_playlist.contains(s));
+        all_songs.iter().cloned().partition(|s| {
+            if let Some(id) = crate::youtube::models::YouTubeId::from_any(s) {
+                return songs_in_playlist.contains(&id);
+            }
+            false
+        });
 
+    let pl_name = playlist_name.clone();
     match duplicate_strategy {
-        DuplicateStrategy::None if !duplicate_songs.is_empty() => {}
+        DuplicateStrategy::None if !duplicate_songs.is_empty() => {
+            let skipped = duplicate_songs.len();
+            status_info!("Skipped {} duplicate(s)", skipped);
+        }
         DuplicateStrategy::NonDuplicate if !duplicate_songs.is_empty() => {
             // add only non duplicate songs
+            let added = non_duplicate_songs.len();
+            let skipped = duplicate_songs.len();
             ctx.command(move |client| {
                 client.add_to_playlist_multiple(&playlist_name, non_duplicate_songs)?;
+                if skipped > 0 {
+                    status_info!(
+                        "Added {} song(s) to playlist '{}', skipped {} duplicate(s)",
+                        added,
+                        playlist_name,
+                        skipped
+                    );
+                } else {
+                    status_info!("Added {} song(s) to playlist '{}'", added, playlist_name);
+                }
                 Ok(())
             });
         }
@@ -459,13 +485,12 @@ pub fn add_to_playlist_or_show_modal(
             );
             modal!(ctx, modal);
         }
-        DuplicateStrategy::All
-        | DuplicateStrategy::None
-        | DuplicateStrategy::NonDuplicate
-        | DuplicateStrategy::Ask => {
+        _ => {
             // add all songs
+            let added = all_songs.len();
             ctx.command(move |client| {
-                client.add_to_playlist_multiple(&playlist_name, all_songs)?;
+                client.add_to_playlist_multiple(&pl_name, all_songs)?;
+                status_info!("Added {} song(s) to playlist '{}'", added, pl_name);
                 Ok(())
             });
         }
@@ -500,6 +525,10 @@ fn create_duplicate_songs_modal<'a>(
     }
 
     let playlist_name2 = playlist_name.clone();
+    let all_count = all_songs.len();
+    let non_dup_count = non_duplicate_songs.len();
+    let skipped_count = duplicate_songs.len();
+
     ConfirmModal::builder()
         .ctx(ctx)
         .message(message)
@@ -507,9 +536,11 @@ fn create_duplicate_songs_modal<'a>(
             buttons: vec![
                 (
                     "Add anyway",
-                    Box::new(|ctx| {
+                    Box::new(move |ctx| {
+                        let pl_name = playlist_name2.clone();
                         ctx.command(move |client| {
-                            client.add_to_playlist_multiple(&playlist_name2, all_songs)?;
+                            client.add_to_playlist_multiple(&pl_name, all_songs)?;
+                            status_info!("Added {} song(s) to playlist '{}'", all_count, pl_name);
                             Ok(())
                         });
                         Ok(())
@@ -517,9 +548,16 @@ fn create_duplicate_songs_modal<'a>(
                 ),
                 (
                     "Add non duplicates",
-                    Box::new(|ctx| {
+                    Box::new(move |ctx| {
+                        let pl_name = playlist_name.clone();
                         ctx.command(move |client| {
-                            client.add_to_playlist_multiple(&playlist_name, non_duplicate_songs)?;
+                            client.add_to_playlist_multiple(&pl_name, non_duplicate_songs)?;
+                            status_info!(
+                                "Added {} song(s) to playlist '{}', skipped {} duplicate(s)",
+                                non_dup_count,
+                                pl_name,
+                                skipped_count
+                            );
                             Ok(())
                         });
                         Ok(())
@@ -528,6 +566,103 @@ fn create_duplicate_songs_modal<'a>(
                 ("Cancel", Box::new(|_ctx| Ok(()))),
             ],
         })
+        .build()
+}
+
+pub fn create_download_modal<'a>(songs: &[crate::mpd::commands::Song], ctx: &Ctx) -> MenuModal<'a> {
+    let songs_clone1 = songs.to_owned();
+    let songs_clone2 = songs.to_owned();
+    let songs_clone3 = songs.to_owned();
+
+    MenuModal::new(ctx)
+        .list_section(ctx, move |section| {
+            let s1 = songs_clone1.clone();
+            let section = section.item("Download Track", move |ctx| {
+                let mut trigger_download = Vec::new();
+                for song in &s1 {
+                    if let Some(yt_id) = song.youtube_id() {
+                        if let Some(yt_track) = ctx.youtube_manager.get_cached_metadata(&yt_id) {
+                            trigger_download.push(yt_track);
+                        } else {
+                            status_warn!(
+                                "Metadata not available for download of {}",
+                                yt_id.as_str()
+                            );
+                        }
+                    }
+                }
+                if !trigger_download.is_empty() {
+                    let sender = ctx.youtube_manager.sender();
+                    smol::spawn(async move {
+                        let _ = sender
+                            .send(crate::youtube::events::YouTubeEvent::DownloadMany(
+                                trigger_download.into(),
+                            ))
+                            .await;
+                    })
+                    .detach();
+                }
+                Ok(())
+            });
+
+            let s2 = songs_clone2.clone();
+            let section = section.item("Download Lyrics", move |ctx| {
+                let sender = ctx.youtube_manager.sender();
+                for song in s2 {
+                    let sender = sender.clone();
+                    smol::spawn(async move {
+                        let _ = sender
+                            .send(crate::youtube::events::YouTubeEvent::GetLyrics(song))
+                            .await;
+                    })
+                    .detach();
+                }
+                Ok(())
+            });
+
+            let s3 = songs_clone3.clone();
+            let section = section.item("Download Both", move |ctx| {
+                let sender = ctx.youtube_manager.sender();
+                let mut trigger_download = Vec::new();
+                for song in &s3 {
+                    // Download Audio
+                    if let Some(yt_id) = song.youtube_id() {
+                        if let Some(yt_track) = ctx.youtube_manager.get_cached_metadata(&yt_id) {
+                            trigger_download.push(yt_track);
+                        } else {
+                            status_warn!(
+                                "Metadata not available for download of {}",
+                                yt_id.as_str()
+                            );
+                        }
+                    }
+                    // Download Lyrics
+                    let sender_lyrics = sender.clone();
+                    let song_lyrics = song.clone();
+                    smol::spawn(async move {
+                        let _ = sender_lyrics
+                            .send(crate::youtube::events::YouTubeEvent::GetLyrics(song_lyrics))
+                            .await;
+                    })
+                    .detach();
+                }
+                if !trigger_download.is_empty() {
+                    let sender_audio = sender.clone();
+                    smol::spawn(async move {
+                        let _ = sender_audio
+                            .send(crate::youtube::events::YouTubeEvent::DownloadMany(
+                                trigger_download.into(),
+                            ))
+                            .await;
+                    })
+                    .detach();
+                }
+                Ok(())
+            });
+
+            Some(section)
+        })
+        .list_section(ctx, |section| Some(section.item("Cancel", |_ctx| Ok(()))))
         .build()
 }
 

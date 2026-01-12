@@ -66,6 +66,17 @@ pub fn ctx(
     let scheduler = Scheduler::new((app_event_channel.0.clone(), unbounded().0));
     let key_resolver = KeyResolver::new(&config);
     Box::leak(Box::new(app_event_channel.1.clone()));
+
+    let youtube_manager = crate::youtube::manager::YouTubeManager::new(
+        &std::path::PathBuf::from(":memory:"),
+        None,
+        None,
+        String::new(),
+        crate::config::MpdAddress::default(),
+        None,
+    )
+    .expect("YouTubeManager to be created correctly");
+
     Ctx {
         ytdlp_manager: YtDlpManager::new(work_request_channel.0.clone()),
         mpd_version: Version::new(1, 0, 0),
@@ -90,6 +101,7 @@ pub fn ctx(
         song_played: None,
         input: InputManager::default(),
         key_resolver,
+        youtube_manager: std::sync::Arc::new(youtube_manager),
         cached_queue_time_total: Duration::default(),
     }
 }

@@ -194,7 +194,7 @@ impl Ord for DirOrSongCustomSort<'_, '_> {
                             .fold_case(self.opts.fold_case)
                             .build();
 
-                        let s = song.format(prop, "", TagResolutionStrategy::All);
+                        let s = song.format(prop, "", TagResolutionStrategy::All, None);
                         if let Some(s) = s {
                             // The next compare should not ignore leading "the" if the resulting
                             // format is not empty
@@ -546,14 +546,17 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            dir("dir1"),
-            dir("dir2"),
-            dir("dir3"),
-            song("song1", &[]),
-            song("song2", &[]),
-            song("song3", &[]),
-        ]);
+        assert_equivalent(
+            &result,
+            &[
+                dir("dir1"),
+                dir("dir2"),
+                dir("dir3"),
+                song("song1", &[]),
+                song("song2", &[]),
+                song("song3", &[]),
+            ],
+        );
     }
 
     #[test]
@@ -580,14 +583,17 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("song3", &[]),
-            song("song2", &[]),
-            song("song1", &[]),
-            dir("dir3"),
-            dir("dir2"),
-            dir("dir1"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[
+                song("song3", &[]),
+                song("song2", &[]),
+                song("song1", &[]),
+                dir("dir3"),
+                dir("dir2"),
+                dir("dir1"),
+            ],
+        );
     }
 
     #[test]
@@ -614,14 +620,17 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("song1", &[]),
-            dir("b_dir1"),
-            song("song2", &[]),
-            dir("d_dir2"),
-            song("song3", &[]),
-            dir("f_dir3"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[
+                song("song1", &[]),
+                dir("b_dir1"),
+                song("song2", &[]),
+                dir("d_dir2"),
+                song("song3", &[]),
+                dir("f_dir3"),
+            ],
+        );
     }
 
     #[test]
@@ -648,14 +657,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            dir("f"),
-            song("e", &[]),
-            dir("d"),
-            song("c", &[]),
-            dir("b"),
-            song("a", &[]),
-        ]);
+        assert_equivalent(
+            &result,
+            &[dir("f"), song("e", &[]), dir("d"), song("c", &[]), dir("b"), song("a", &[])],
+        );
     }
 
     #[test]
@@ -682,14 +687,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            dir("b"),
-            dir("d"),
-            dir("f"),
-            song("a", &[]),
-            song("c", &[]),
-            song("e", &[]),
-        ]);
+        assert_equivalent(
+            &result,
+            &[dir("b"), dir("d"), dir("f"), song("a", &[]), song("c", &[]), song("e", &[])],
+        );
     }
 
     #[test]
@@ -716,14 +717,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("e", &[]),
-            song("c", &[]),
-            song("a", &[]),
-            dir("f"),
-            dir("d"),
-            dir("b"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[song("e", &[]), song("c", &[]), song("a", &[]), dir("f"), dir("d"), dir("b")],
+        );
     }
 
     #[test]
@@ -750,14 +747,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("a", &[]),
-            dir("b"),
-            song("c", &[]),
-            dir("d"),
-            song("e", &[]),
-            dir("f"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[song("a", &[]), dir("b"), song("c", &[]), dir("d"), song("e", &[]), dir("f")],
+        );
     }
 
     #[test]
@@ -784,14 +777,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("a", &[]),
-            dir("b"),
-            song("c", &[]),
-            dir("d"),
-            song("e", &[]),
-            dir("f"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[song("a", &[]), dir("b"), song("c", &[]), dir("d"), song("e", &[]), dir("f")],
+        );
     }
 
     #[test]
@@ -817,13 +806,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("c", &[]),
-            song("b", &[]),
-            song("d", &[]),
-            song("e", &[]),
-            song("a", &[]),
-        ]);
+        assert_equivalent(
+            &result,
+            &[song("c", &[]), song("b", &[]), song("d", &[]), song("e", &[]), song("a", &[])],
+        );
     }
 
     #[test]
@@ -851,15 +837,18 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("a", &[]),
-            song("b", &[]),
-            song("B", &[]),
-            song("C", &[]),
-            song("c", &[]),
-            song("d", &[]),
-            song("G", &[]),
-        ]);
+        assert_equivalent(
+            &result,
+            &[
+                song("a", &[]),
+                song("b", &[]),
+                song("B", &[]),
+                song("C", &[]),
+                song("c", &[]),
+                song("d", &[]),
+                song("G", &[]),
+            ],
+        );
     }
 
     #[test]
@@ -887,15 +876,18 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            song("B", &[]),
-            song("C", &[]),
-            song("G", &[]),
-            song("a", &[]),
-            song("b", &[]),
-            song("c", &[]),
-            song("d", &[]),
-        ]);
+        assert_equivalent(
+            &result,
+            &[
+                song("B", &[]),
+                song("C", &[]),
+                song("G", &[]),
+                song("a", &[]),
+                song("b", &[]),
+                song("c", &[]),
+                song("d", &[]),
+            ],
+        );
     }
 
     #[test]
@@ -915,12 +907,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            dir("a is first"),
-            dir("The b is second"),
-            dir("the Foo"),
-            dir("Gee"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[dir("a is first"), dir("The b is second"), dir("the Foo"), dir("Gee")],
+        );
     }
 
     #[test]
@@ -940,15 +930,10 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            dir("a"),
-            dir("b"),
-            dir("B"),
-            dir("C"),
-            dir("c"),
-            dir("d"),
-            dir("G"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[dir("a"), dir("b"), dir("B"), dir("C"), dir("c"), dir("d"), dir("G")],
+        );
     }
 
     #[test]
@@ -968,14 +953,9 @@ mod ordtest {
             .collect_vec();
 
         dbg!(&result);
-        assert_equivalent(&result, &[
-            dir("B"),
-            dir("C"),
-            dir("G"),
-            dir("a"),
-            dir("b"),
-            dir("c"),
-            dir("d"),
-        ]);
+        assert_equivalent(
+            &result,
+            &[dir("B"), dir("C"), dir("G"), dir("a"), dir("b"), dir("c"), dir("d")],
+        );
     }
 }

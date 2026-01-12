@@ -1,10 +1,14 @@
 use super::utils::tilde_expand;
 use crate::shared::env::ENV;
+use strum::Display;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Display)]
 pub enum MpdAddress {
+    #[strum(to_string = "{0}")]
     IpAndPort(String),
+    #[strum(to_string = "{0}")]
     SocketPath(String),
+    #[strum(to_string = "{0}")]
     AbstractSocket(String),
 }
 

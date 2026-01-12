@@ -212,6 +212,7 @@ mod test {
             #[cfg(debug_assertions)]
             logs: HashMap::new(),
             queue: HashMap::new(),
+            youtube: HashMap::new(),
         };
 
         cfg.navigation.insert(vec![k('g')].into(), CommonAction::Down);
@@ -229,6 +230,7 @@ mod test {
             #[cfg(debug_assertions)]
             logs: HashMap::new(),
             queue: HashMap::new(),
+            youtube: HashMap::new(),
         };
 
         insert_cfg.navigation.insert(vec![k('g')].into(), CommonAction::Close);

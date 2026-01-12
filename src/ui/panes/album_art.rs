@@ -42,6 +42,37 @@ impl AlbumArtPane {
 
         let song_uri = song_uri.to_owned();
         let order = ctx.config.album_art.order;
+
+        if let Some(yt_id) = current_song.youtube_id() {
+            if let Some(cache_dir) = &ctx.config.cache_dir {
+                let thumbnail_path = cache_dir.join("thumbnails").join(format!("{yt_id}.jpg"));
+                if thumbnail_path.exists() {
+                    match std::fs::read(&thumbnail_path) {
+                        Ok(data) => {
+                            ctx.query()
+                                .id(ALBUM_ART)
+                                .replace_id(ALBUM_ART)
+                                .target(PaneType::AlbumArt)
+                                .query(move |_| Ok(MpdQueryResult::AlbumArt(Some(data))));
+                            return Some(());
+                        }
+                        Err(e) => {
+                            log::error!("Failed to read cached thumbnail: {e}");
+                        }
+                    }
+                } else {
+                    let sender = ctx.youtube_manager.sender();
+                    smol::spawn(async move {
+                        let _ = sender
+                            .send(crate::youtube::events::YouTubeEvent::DownloadThumbnail(yt_id))
+                            .await;
+                    })
+                    .detach();
+                    return Some(());
+                }
+            }
+        }
+
         ctx.query().id(ALBUM_ART).replace_id(ALBUM_ART).target(PaneType::AlbumArt).query(move |client| {
             let start = std::time::Instant::now();
             log::debug!(file = song_uri.as_str(); "Searching for album art");
@@ -119,6 +150,23 @@ impl Pane for AlbumArtPane {
                     return Ok(());
                 }
                 self.before_show(ctx)?;
+            }
+            UiEvent::YouTube(crate::youtube::events::YouTubeEvent::ThumbnailDownloaded {
+                youtube_id,
+                path,
+            }) if is_visible => {
+                if let Some((_, song)) = ctx.find_current_song_in_queue() {
+                    if song.youtube_id().as_ref() == Some(youtube_id) {
+                        match std::fs::read(path) {
+                            Ok(data) => {
+                                self.album_art.show(data, ctx)?;
+                            }
+                            Err(e) => {
+                                log::error!("Failed to read downloaded thumbnail: {e}");
+                            }
+                        }
+                    }
+                }
             }
             UiEvent::Displayed if is_visible => {
                 if is_visible && !self.is_modal_open {

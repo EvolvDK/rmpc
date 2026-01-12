@@ -1,0 +1,88 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Run daily at midnight
+  workflow_dispatch:
+    inputs:
+      feature_branch:
+        description: 'Name of the feature branch to sync'
+        required: true
+        default: 'feat/youtube-streaming'
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_URL: https://github.com/mierak/rmpc.git
+  DEFAULT_BRANCH: master
+  # Default feature branch name to use when running on schedule.
+  # Change this to match your actual feature branch name.
+  SCHEDULE_FEATURE_BRANCH: feat/youtube-streaming
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEFAULT_BRANCH }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync Default Branch
+        run: |
+          # Add upstream
+          git remote add upstream $UPSTREAM_URL
+          git fetch upstream
+
+          # Reset default branch to upstream
+          git checkout $DEFAULT_BRANCH
+          git reset --hard upstream/$DEFAULT_BRANCH
+          
+          # Push to origin
+          git push origin $DEFAULT_BRANCH --force
+
+  sync-feature-branch:
+    needs: sync-upstream
+    runs-on: ubuntu-latest
+    # Run if manual trigger or if it's a schedule run
+    if: always() && (github.event_name == 'schedule' || github.event.inputs.feature_branch != '')
+    steps:
+      - name: Determine Branch Name
+        id: branch_name
+        run: |
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "BRANCH=${{ env.SCHEDULE_FEATURE_BRANCH }}" >> $GITHUB_OUTPUT
+          else
+            echo "BRANCH=${{ github.event.inputs.feature_branch }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout Feature Branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.branch_name.outputs.BRANCH }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Rebase onto Default Branch
+        run: |
+          FEATURE_BRANCH=${{ steps.branch_name.outputs.BRANCH }}
+          
+          # Fetch updated origin/master
+          git fetch origin $DEFAULT_BRANCH
+          
+          # Rebase
+          git rebase origin/$DEFAULT_BRANCH
+          
+          # Push force
+          git push origin $FEATURE_BRANCH --force

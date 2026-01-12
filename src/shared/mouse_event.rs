@@ -1,9 +1,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
-    MouseButton,
-    MouseEvent as CTMouseEvent,
-    MouseEventKind as CTMouseEventKind,
+    MouseButton, MouseEvent as CTMouseEvent, MouseEventKind as CTMouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
 
@@ -58,7 +56,7 @@ impl MouseEventTracker {
                 Some(MouseEvent { x, y, kind: MouseEventKind::ScrollDown })
             }
             CTMouseEventKind::ScrollUp => Some(MouseEvent { x, y, kind: MouseEventKind::ScrollUp }),
-            CTMouseEventKind::Up(_) => None,
+            CTMouseEventKind::Up(_) => Some(MouseEvent { x, y, kind: MouseEventKind::Release }),
             CTMouseEventKind::Drag(MouseButton::Left) => Some(MouseEvent {
                 x,
                 y,
@@ -89,6 +87,7 @@ pub enum MouseEventKind {
     RightClick,
     ScrollDown,
     ScrollUp,
+    Release,
     Drag { drag_start_position: Position },
 }
 

@@ -1,12 +1,13 @@
 #[cfg(debug_assertions)]
 use crate::config::keys::LogsActions;
-use crate::config::keys::{CommonAction, GlobalAction, QueueActions};
+use crate::config::keys::{CommonAction, GlobalAction, QueueActions, YoutubeActions};
 
 #[derive(Debug, Clone)]
 pub enum Actions {
     Global(GlobalAction),
     Common(CommonAction),
     Queue(QueueActions),
+    Youtube(YoutubeActions),
     #[cfg(debug_assertions)]
     Logs(LogsActions),
 }
@@ -29,6 +30,12 @@ impl From<QueueActions> for Actions {
     }
 }
 
+impl From<YoutubeActions> for Actions {
+    fn from(value: YoutubeActions) -> Self {
+        Actions::Youtube(value)
+    }
+}
+
 #[cfg(debug_assertions)]
 impl From<LogsActions> for Actions {
     fn from(value: LogsActions) -> Self {
@@ -47,6 +54,10 @@ impl Actions {
 
     pub fn as_queue(&self) -> Option<&QueueActions> {
         if let Actions::Queue(action) = self { Some(action) } else { None }
+    }
+
+    pub fn as_youtube(&self) -> Option<&YoutubeActions> {
+        if let Actions::Youtube(action) = self { Some(action) } else { None }
     }
 
     #[cfg(debug_assertions)]

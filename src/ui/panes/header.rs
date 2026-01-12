@@ -64,6 +64,7 @@ impl Pane for HeaderPane {
                     Ok(())
                 });
             }
+            MouseEventKind::Release => {}
             _ => {}
         }
 

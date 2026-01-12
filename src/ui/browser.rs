@@ -8,8 +8,7 @@ use ratatui::{prelude::Rect, widgets::ListState};
 use crate::{
     MpdQueryResult,
     config::keys::{
-        CommonAction,
-        GlobalAction,
+        CommonAction, GlobalAction,
         actions::{AddKind, AutoplayKind, DeleteKind, Position, RateKind, SaveKind},
     },
     ctx::{Ctx, LIKE_STICKER, RATING_STICKER},
@@ -28,12 +27,8 @@ use crate::{
             confirm_modal::{Action, ConfirmModal},
             input_modal::InputModal,
             menu::{
-                add_to_playlist_or_show_modal,
-                create_add_modal,
-                create_delete_modal,
-                create_rating_modal,
-                create_save_modal,
-                delete_from_playlist_or_show_confirmation,
+                add_to_playlist_or_show_modal, create_add_modal, create_delete_modal,
+                create_rating_modal, create_save_modal, delete_from_playlist_or_show_confirmation,
                 modal::MenuModal,
             },
             select_modal::SelectModal,
@@ -85,6 +80,27 @@ where
                 } else {
                     (Position::EndOfQueue, AutoplayKind::None)
                 };
+
+                // Proactive refresh check for the song we are about to play
+                if autoplay == AutoplayKind::Hovered
+                    && let Some(song) = selected.as_song()
+                    && song.is_youtube_expired()
+                {
+                    let youtube_id = song.youtube_id().unwrap_or_default().to_string();
+                    let pos = None;
+                    let sender = ctx.youtube_manager.sender();
+                    smol::spawn(async move {
+                        let _ = sender
+                            .send(crate::youtube::events::YouTubeEvent::RefreshRequest {
+                                youtube_id,
+                                pos,
+                                play_after_refresh: true,
+                            })
+                            .await;
+                    })
+                    .detach();
+                    return Ok(());
+                }
 
                 Client::resolve_and_enqueue(ctx, items, position, autoplay, None, hovered_song_idx);
             }
@@ -138,7 +154,6 @@ where
             .fold((Vec::new(), None), |mut acc, (idx, item)| {
                 let filename = item.as_path().to_owned();
                 if let Some(hovered) = hovered
-                    && hovered.is_file()
                     && hovered.as_path() == filename
                 {
                     acc.1 = Some(idx);
@@ -384,7 +399,11 @@ where
 
                 self.open_context_menu(ctx)?;
             }
-            MouseEventKind::Drag { .. } => {}
+            MouseEventKind::Drag { .. } => {
+                // drag events are handled by scrollbar interaction, no
+                // additional action needed
+            }
+            MouseEventKind::Release => {}
             _ => {}
         }
 
@@ -732,6 +751,10 @@ where
             .map(|(_, item)| self.list_songs_in_item(item.to_owned()))
             .collect_vec();
 
+        let selected_item = self.stack().current().selected().cloned();
+        let is_playlist_view = !self.stack().path().is_empty();
+        let is_playlist_item = selected_item.as_ref().is_some_and(|i| !i.is_file());
+
         let modal = MenuModal::new(ctx)
             .list_section(ctx, |mut section| {
                 let (current_items, _) = self.enqueue_items(false);
@@ -754,9 +777,38 @@ where
                     });
                 }
 
+                if is_playlist_item && let Some(item) = selected_item.clone() {
+                    let playlist_name = item.as_path().to_owned();
+                    section.add_item("Create a copy", move |ctx| {
+                        let source_pl = playlist_name.clone();
+                        modal!(
+                            ctx,
+                            InputModal::new(ctx)
+                                .title("Copy playlist")
+                                .confirm_label("Copy")
+                                .input_label("New name:")
+                                .initial_value(format!("{source_pl} (copy)"))
+                                .on_confirm(move |ctx, new_name| {
+                                    let source = source_pl.clone();
+                                    let target = new_name.to_owned();
+                                    ctx.command(move |client| {
+                                        let songs = client.list_playlist_info(&source, None)?;
+                                        client.create_playlist(
+                                            &target,
+                                            songs.into_iter().map(|s| s.file).collect(),
+                                        )?;
+                                        Ok(())
+                                    });
+                                    Ok(())
+                                })
+                        );
+                        Ok(())
+                    });
+                }
+
                 let songs_in_items_clone = list_songs_in_items.clone();
                 let initial_playlist_name = self.initial_playlist_name(false);
-                section.add_item("Create playlist", move |ctx| {
+                section.add_item("Create playlist from selection", move |ctx| {
                     modal!(
                         ctx,
                         InputModal::new(ctx)
@@ -774,11 +826,16 @@ where
                                         .into_iter()
                                         .flatten()
                                         .collect();
+                                    let len = items.len();
                                     client.create_playlist(
                                         &value,
                                         items.into_iter().map(|s| s.file).collect(),
                                     )?;
-
+                                    status_info!(
+                                        "Created playlist '{}' with {} song(s)",
+                                        value,
+                                        len
+                                    );
                                     Ok(())
                                 });
                                 Ok(())
@@ -787,34 +844,40 @@ where
                     Ok(())
                 });
 
+                let songs_in_items_clone = list_songs_in_items.clone();
                 section.add_item("Add to playlist", move |ctx| {
-                    let (items, playlists) = ctx.query_sync(move |client| {
-                        let items: Vec<_> = list_songs_in_items
+                    let items = ctx.query_sync(move |client| {
+                        let items: Vec<_> = songs_in_items_clone
                             .into_iter()
                             .map(|cb| -> Result<_> { cb(client) })
                             .collect::<Result<Vec<Vec<_>>>>()?
                             .into_iter()
                             .flatten()
+                            .map(|s| s.file)
                             .collect();
-                        let playlists = client.list_playlists()?;
-                        Ok((items, playlists.into_iter().map(|p| p.name).collect_vec()))
+                        Ok(items)
                     })?;
 
                     modal!(
                         ctx,
                         SelectModal::builder()
                             .ctx(ctx)
-                            .options(playlists)
+                            .options(ctx.query_sync(|client| {
+                                Ok(client
+                                    .list_playlists()?
+                                    .into_iter()
+                                    .map(|p| p.name)
+                                    .collect_vec())
+                            })?)
                             .confirm_label("Add")
                             .title("Select a playlist")
                             .on_confirm(move |ctx, selected, _idx| {
-                                ctx.command(move |client| {
-                                    client.add_to_playlist_multiple(
-                                        &selected,
-                                        items.into_iter().map(|s| s.file).collect_vec(),
-                                    )?;
-                                    Ok(())
-                                });
+                                add_to_playlist_or_show_modal(
+                                    selected,
+                                    items,
+                                    ctx.config.playlist_duplicate_strategy,
+                                    ctx,
+                                );
                                 Ok(())
                             })
                             .build()
@@ -825,50 +888,71 @@ where
                 Some(section)
             })
             .list_section(ctx, |mut section| {
-                let current_item = self.stack().current().selected().cloned();
-                if let Some(item) = current_item {
-                    let is_renameable =
-                        self.stack().current().selected().is_some_and(|item| self.can_rename(item));
-                    if is_renameable {
+                if let Some(item) = selected_item {
+                    if self.can_rename(&item) {
+                        let item_clone = item.clone();
                         section.add_item("Rename", move |ctx| {
-                            Self::rename(&item, ctx)?;
+                            Self::rename(&item_clone, ctx)?;
                             Ok(())
                         });
                     }
+
+                    let songs_in_items_clone = list_songs_in_items.clone();
+                    section.add_item("Download", move |ctx| {
+                        let songs = ctx.query_sync(move |client| {
+                            let mut songs = Vec::new();
+                            for cb in songs_in_items_clone {
+                                songs.extend(cb(client)?);
+                            }
+                            Ok(songs)
+                        })?;
+
+                        if songs.is_empty() {
+                            status_info!("No songs found in selection to download");
+                        } else {
+                            modal!(
+                                ctx,
+                                crate::ui::modals::menu::create_download_modal(&songs, ctx)
+                            );
+                        }
+                        Ok(())
+                    });
                 }
 
                 if section.items.is_empty() { None } else { Some(section) }
             })
             .list_section(ctx, |mut section| {
-                // TODO Deletion cannot be currently done as we need to clear the marked items
-                // after the deletion occurs but do not have access to the pane's state in the
-                // callback. An event should be dispatched upon deletion to clear the items or
-                // better yet, the marked items need to be refactored directly into the
-                // `DirStackItem` directly.
-
-                // if !to_delete.is_empty() {
-                //     section.add_item("Delete", move |ctx| {
-                //         if !to_delete.is_empty() {
-                //             ctx.command(move |client| {
-                //                 client.delete_multiple(to_delete)?;
-                //                 Ok(())
-                //             });
-                //         }
-                //         Ok(())
-                //     });
-                // }
-                //
-                // if !all_to_delete.is_empty() {
-                //     section.add_item("Delete all", move |ctx| {
-                //         if !all_to_delete.is_empty() {
-                //             ctx.command(move |client| {
-                //                 client.delete_multiple(all_to_delete)?;
-                //                 Ok(())
-                //             });
-                //         }
-                //         Ok(())
-                //     });
-                // }
+                let items_to_delete = self.delete_items(false);
+                if !items_to_delete.is_empty() {
+                    let label = if is_playlist_view { "Remove from playlist" } else { "Delete" };
+                    let len = items_to_delete.len();
+                    section.add_item(label, move |ctx| {
+                        let to_delete = items_to_delete.clone();
+                        modal!(
+                            ctx,
+                            ConfirmModal::builder()
+                                .ctx(ctx)
+                                .message(vec![
+                                    format!("Are you sure you want to delete {} item(s)?", len),
+                                    "This action cannot be undone.".into()
+                                ])
+                                .action(Action::Single {
+                                    confirm_label: Some("Delete"),
+                                    cancel_label: None,
+                                    on_confirm: Box::new(move |ctx| {
+                                        ctx.command(move |client| {
+                                            client.delete_multiple(to_delete)?;
+                                            Ok(())
+                                        });
+                                        Ok(())
+                                    }),
+                                })
+                                .size((45, 6))
+                                .build()
+                        );
+                        Ok(())
+                    });
+                }
 
                 if section.items.is_empty() { None } else { Some(section) }
             })

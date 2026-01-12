@@ -3,16 +3,9 @@ use std::{path::Path, time::Duration};
 use anyhow::{Result, bail};
 use crossbeam::channel::Sender;
 use notify_debouncer_full::{
-    DebounceEventResult,
-    DebouncedEvent,
-    Debouncer,
-    RecommendedCache,
-    new_debouncer,
+    DebounceEventResult, DebouncedEvent, Debouncer, RecommendedCache, new_debouncer,
     notify::{
-        Event,
-        EventKind,
-        RecommendedWatcher,
-        RecursiveMode,
+        Event, EventKind, RecommendedWatcher, RecursiveMode,
         event::{AccessKind, AccessMode},
     },
 };
