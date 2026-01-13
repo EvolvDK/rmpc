@@ -76,6 +76,13 @@ impl KeySequence {
         self
     }
 
+    pub fn alt(mut self) -> Self {
+        if let Some(last_key) = self.0.last_mut() {
+            last_key.modifiers |= KeyModifiers::ALT;
+        }
+        self
+    }
+
     pub fn shift(mut self) -> Self {
         if let Some(last_key) = self.0.last_mut()
             && !matches!(last_key.key, KeyCode::Char(_))

@@ -40,16 +40,10 @@ use crate::{
     config::{
         tabs::{Pane as ConfigPane, PaneType, SizedPaneOrSplit},
         theme::{
-            SymbolsConfig,
-            TagResolutionStrategy,
+            SymbolsConfig, TagResolutionStrategy,
             properties::{
-                Property,
-                PropertyKind,
-                PropertyKindOrText,
-                SongProperty,
-                StatusProperty,
-                Transform,
-                WidgetProperty,
+                Property, PropertyKind, PropertyKindOrText, SongProperty, StatusProperty,
+                Transform, WidgetProperty,
             },
         },
     },
@@ -64,9 +58,7 @@ use crate::{
         mouse_event::MouseEvent,
     },
     ui::{
-        input::InputManager,
-        input::InputResultEvent,
-        panes::queue_header::QueueHeaderPane,
+        input::InputResultEvent, panes::queue_header::QueueHeaderPane,
         widgets::header::PropertyTemplates,
     },
 };

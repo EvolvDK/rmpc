@@ -11,6 +11,7 @@ use ratatui::{Terminal, layout::Rect, prelude::Backend};
 
 use super::command::{create_env, run_external};
 use crate::{
+    Command,
     config::{Config, cli::RemoteCommandQuery},
     ctx::Ctx,
     mpd::{
@@ -18,7 +19,7 @@ use crate::{
         mpd_client::{MpdClient, SaveMode},
     },
     shared::{
-        events::{AppEvent, WorkDone},
+        events::{AppEvent, WorkDone, WorkRequest},
         ext::error::ErrorExt,
         id::{self, Id},
         keys::KeyResolver,
@@ -30,11 +31,7 @@ use crate::{
         },
     },
     ui::{
-        KeyHandleResult,
-        StatusMessage,
-        Ui,
-        UiAppEvent,
-        UiEvent,
+        KeyHandleResult, StatusMessage, Ui, UiAppEvent, UiEvent,
         modals::{downloads::DownloadsModal, info_modal::InfoModal, select_modal::SelectModal},
     },
 };
@@ -782,6 +779,29 @@ fn main_task<B: Backend + std::io::Write>(
                             {
                                 log::error!("Failed to send Clear command: {e}");
                             }
+                        }
+                        crate::youtube::events::YouTubeEvent::LibraryUpdated => {
+                            if let Err(err) = ui.on_event(UiEvent::StoredPlaylist, &mut ctx) {
+                                log::error!(error:? = err; "UI failed to handle StoredPlaylist event after library update");
+                            }
+                        }
+                        crate::youtube::events::YouTubeEvent::ImportFinished {
+                            success,
+                            skipped,
+                            failed,
+                        } => {
+                            let _ = ctx.app_event_sender.send(AppEvent::Status(
+                                format!("Import finished. Added: {success}, Skipped: {skipped}, Failed: {failed}"),
+                                crate::shared::events::Level::Info,
+                                Duration::from_secs(5),
+                            ));
+                        }
+                        crate::youtube::events::YouTubeEvent::YouTubeError(err) => {
+                            let _ = ctx.app_event_sender.send(AppEvent::Status(
+                                err.clone(),
+                                crate::shared::events::Level::Error,
+                                Duration::from_secs(5),
+                            ));
                         }
                         _ => {}
                     }

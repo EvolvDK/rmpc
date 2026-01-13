@@ -138,7 +138,6 @@ impl YtdlpAdapter {
             duration: Duration::from_secs_f64(json.duration.unwrap_or(0.0)),
             link: format!("https://www.youtube.com/watch?v={youtube_id}"),
             thumbnail_url: json.thumbnail,
-            streaming_url: None,
             added_at: chrono::Utc::now(),
             last_modified_at: chrono::Utc::now(),
         })

@@ -9,18 +9,7 @@ pub use actions::{
 
 #[cfg(debug_assertions)]
 use actions::LogsActionsFile;
-pub use actions::{
-    AlbumsActions,
-    ArtistsActions,
-    CommonAction,
-    DirectoriesActions,
-    GlobalAction,
-    QueueActions,
-    SearchActions,
-    YoutubeActions,
-};
 use actions::{CommonActionFile, GlobalActionFile, QueueActionsFile, YoutubeActionsFile};
-use crossterm::event::{KeyCode, KeyModifiers};
 pub use key::Key;
 use serde::{Deserialize, Serialize};
 

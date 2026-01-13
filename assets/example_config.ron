@@ -13,6 +13,8 @@
     wrap_navigation: false,
     enable_mouse: true,
     scroll_amount: 1,
+    lyrics_auto_download: None,
+    lyrics_sub_langs: "*.orig, en.*",
     enable_config_hot_reload: true,
     enable_lyrics_hot_reload: false,
     status_update_interval_ms: 1000,
@@ -27,7 +29,7 @@
     album_art: (
         method: Auto,
         max_size_px: (width: 1200, height: 1200),
-        disabled_protocols: ["http://", "https://"],
+        disabled_protocols: ["http://"],
         vertical_align: Center,
         horizontal_align: Center,
     ),
@@ -125,6 +127,10 @@
             "<C-f>":   CycleFilterMode(forward: true),
             "<C-A-f>": CycleFilterMode(forward: false),
         },
+    ),
+    youtube: (
+        search_results_limit: 100,
+        column_widths: [40, 30, 30],
     ),
     search: (
         case_sensitive: false,

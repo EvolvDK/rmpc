@@ -105,6 +105,7 @@ pub enum YouTubeEvent {
     },
     ImportFinished {
         success: usize,
+        skipped: usize,
         failed: usize,
     },
 }

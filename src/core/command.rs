@@ -1,6 +1,6 @@
 use std::{io::Write, path::PathBuf, sync::Arc};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use itertools::Itertools;
 
 use crate::{
@@ -24,8 +24,13 @@ use crate::{
         mpd_client_ext::MpdClientExt,
         ytdlp::{self, YtDlp, YtDlpHost},
     },
-    youtube::{manager::YouTubeManager, models::YouTubeId},
+    youtube::{
+        db::Database, events::YouTubeEvent, import::ImportService, manager::YouTubeManager,
+        models::YouTubeId, ytdlp::YtdlpAdapter,
+    },
 };
+
+use parking_lot::Mutex;
 
 impl Command {
     pub fn execute(
@@ -586,21 +591,11 @@ impl Command {
                 Ok(())
             })),
             Command::ImportLibrary { path } => {
-                Ok(Box::new(move |_client| {
-                    // We need a way to send events to youtube_manager from here.
-                    // Command::execute returns a Boxed closure that takes &mut Client.
-                    // This is used by CliConfig::execute_command which has access to Ctx if available.
-                    // But here it's more for CLI standalone.
-                    // Actually, Command::execute is also used by main.rs when running CLI commands.
-                    log::info!("Importing library from {path}");
-                    // This will be handled in main.rs or where Command::execute is called if Ctx is present.
-                    Ok(())
-                }))
+                import_youtube(config, YouTubeEvent::ImportLibrary(path))
             }
-            Command::ImportPlaylists { path } => Ok(Box::new(move |_client| {
-                log::info!("Importing playlists from {path}");
-                Ok(())
-            })),
+            Command::ImportPlaylists { path } => {
+                import_youtube(config, YouTubeEvent::ImportPlaylists(path))
+            }
             Command::GetLyrics => Ok(Box::new(|_client| {
                 // In TUI, this is handled specifically in ui/mod.rs to use YouTubeManager.
                 // In standalone CLI, we could implement it here if needed,
@@ -609,6 +604,41 @@ impl Command {
             })),
         }
     }
+}
+
+fn import_youtube(
+    config: &CliConfig,
+    event: YouTubeEvent,
+) -> Result<Box<dyn FnOnce(&mut Client<'_>) -> Result<()> + Send + 'static>> {
+    let db_path =
+        config.youtube_db_path.clone().context("YouTube database path is not configured")?;
+    let address = config.address.clone();
+    let password = config.password.clone();
+
+    Ok(Box::new(move |_client| {
+        smol::block_on(async move {
+            let db = Arc::new(Mutex::new(Database::new(&db_path)?));
+            let (event_tx, event_rx) = async_channel::unbounded();
+            let (permit_tx, permit_rx) = async_channel::bounded(10);
+            for _ in 0..10 {
+                let _ = permit_tx.send(()).await;
+            }
+
+            let client = Arc::new(YtdlpAdapter);
+            let service = Arc::new(ImportService::new(
+                event_tx, db, address, password, permit_tx, permit_rx, client,
+            ));
+
+            service.handle_event(event).await;
+
+            while let Ok(event) = event_rx.recv().await {
+                if let YouTubeEvent::ImportFinished { .. } = event {
+                    break;
+                }
+            }
+            Ok(())
+        })
+    }))
 }
 
 impl From<Provider> for YtDlpHost {

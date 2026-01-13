@@ -45,7 +45,7 @@ impl From<Config> for CliConfig {
             password: value.password,
             cache_dir: value.cache_dir,
             lyrics_dir: value.lyrics_dir,
-            youtube_db_path: None,
+            youtube_db_path: value.youtube_db_path,
         }
     }
 }
@@ -57,7 +57,7 @@ impl From<&Config> for CliConfig {
             password: value.password.clone(),
             cache_dir: value.cache_dir.clone(),
             lyrics_dir: value.lyrics_dir.clone(),
-            youtube_db_path: None,
+            youtube_db_path: value.youtube_db_path.clone(),
         }
     }
 }

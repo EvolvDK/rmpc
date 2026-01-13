@@ -1,3 +1,19 @@
+use crate::youtube::models::YouTubeId;
+
+pub fn parse_csv_for_ids(path: &std::path::Path) -> Vec<YouTubeId> {
+    let mut ids = Vec::new();
+    if let Ok(mut rdr) = csv::Reader::from_path(path) {
+        for result in rdr.records().flatten() {
+            if let Some(url_or_id) = result.get(0) {
+                if let Some(id) = YouTubeId::from_any(url_or_id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    ids
+}
+
 pub fn clean_metadata(artist: &str, title: &str) -> (String, String) {
     let mut clean_artist = artist.to_string();
     let mut clean_title = title.to_string();

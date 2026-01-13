@@ -29,8 +29,13 @@ impl From<YouTubeTrack> for Song {
             metadata.insert(Song::ALBUM.to_string(), MetadataTag::Single(album));
         }
 
+        // We don't have the streaming URL here, so we default to an empty string.
+        // The StreamingService will resolve the URL when the song is added to the queue
+        // by detecting the #id= fragment.
+        let url = "";
+
         Song {
-            file: yt.youtube_id.append_to_url(&yt.link),
+            file: yt.youtube_id.append_to_url(url),
             metadata,
             duration: Some(yt.duration),
             id: 0,
@@ -64,7 +69,7 @@ impl Song {
     }
 
     pub fn is_youtube(&self) -> bool {
-        self.file.contains("videoplayback") || self.file.contains("googlevideo.com")
+        self.youtube_id().is_some()
     }
 
     pub fn youtube_id(&self) -> Option<YouTubeId> {

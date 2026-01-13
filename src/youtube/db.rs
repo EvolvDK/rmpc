@@ -13,7 +13,6 @@ fn row_to_track(row: &rusqlite::Row) -> rusqlite::Result<YouTubeTrack> {
         album: row.get(3)?,
         duration: std::time::Duration::from_secs(duration_secs as u64),
         link: row.get(5)?,
-        streaming_url: None,
         thumbnail_url: row.get(6)?,
         added_at: row.get(7)?,
         last_modified_at: row.get(8)?,

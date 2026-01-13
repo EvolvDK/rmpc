@@ -255,7 +255,7 @@ impl<C: YouTubeClient + 'static> StreamingService<C> {
         }
     }
 
-    async fn get_streaming_url(
+    pub(crate) async fn get_streaming_url(
         &self,
         youtube_id: &YouTubeId,
     ) -> crate::youtube::error::Result<String> {

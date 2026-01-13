@@ -106,6 +106,7 @@ pub struct Config {
     pub cava: Cava,
     pub auto_open_downloads: bool,
     pub youtube: YouTubeConfig,
+    pub youtube_db_path: Option<PathBuf>,
     pub playlist_duplicate_strategy: DuplicateStrategy,
 }
 
@@ -561,6 +562,7 @@ impl ConfigFile {
             cava: self.cava.into(),
             auto_open_downloads: self.auto_open_downloads,
             youtube: self.youtube.into(),
+            youtube_db_path: config_path.map(|p| p.parent().unwrap_or(p).join("youtube.db")),
             playlist_duplicate_strategy: self.playlist_duplicate_strategy,
         };
 

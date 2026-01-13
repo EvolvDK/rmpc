@@ -27,7 +27,7 @@ impl LyricsTestContext {
         let _ = flexi_logger::Logger::try_with_str("debug").map(|l| l.start().ok());
         let mut temp_dir = std::env::temp_dir();
         let random_suffix: u64 = rand::random();
-        temp_dir.push(format!("rmpc_test_lyrics_{}", random_suffix));
+        temp_dir.push(format!("rmpc_test_lyrics_{random_suffix}"));
         fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
 
         let lyrics_dir = temp_dir.join("lyrics");
@@ -64,9 +64,9 @@ impl LyricsTestContext {
         let mut song = Song::default();
         if let Some(id) = youtube_id {
             song.file =
-                format!("https://rr1---sn-1.googlevideo.com/videoplayback?id=song1#id={}", id);
+                format!("https://rr1---sn-1.googlevideo.com/videoplayback?id=song1#id={id}");
         } else {
-            song.file = format!("{}/{}.mp3", artist, title);
+            song.file = format!("{artist}/{title}.mp3");
         }
         song.metadata.insert("artist".to_string(), vec![artist.to_string()].into());
         song.metadata.insert("title".to_string(), vec![title.to_string()].into());
@@ -83,6 +83,7 @@ fn lyrics_ctx() -> LyricsTestContext {
 }
 
 #[rstest]
+#[allow(clippy::used_underscore_binding)]
 fn test_clean_metadata_youtube_titles(_lyrics_ctx: LyricsTestContext) {
     let cases = vec![
         (
@@ -146,9 +147,7 @@ fn test_lrclib_complex_titles(lyrics_ctx: LyricsTestContext) {
                 .await;
             assert!(
                 lyrics.is_some(),
-                "Should fetch lyrics for complex title '{} - {}' from lrclib",
-                artist,
-                title
+                "Should fetch lyrics for complex title '{artist} - {title}' from lrclib"
             );
         }
     });
@@ -159,8 +158,8 @@ fn test_lrclib_complex_titles(lyrics_ctx: LyricsTestContext) {
 fn test_ytdlp_direct_popular(lyrics_ctx: LyricsTestContext) {
     smol::block_on(async {
         let yt_id = "4NRXx6U8ABQ"; // The Weeknd - Blinding Lights
-        let url = format!("https://www.youtube.com/watch?v={}", yt_id);
-        let target_path = lyrics_ctx.lyrics_dir.join(format!("{}.lrc", yt_id));
+        let url = format!("https://www.youtube.com/watch?v={yt_id}");
+        let target_path = lyrics_ctx.lyrics_dir.join(format!("{yt_id}.lrc"));
 
         let success = lyrics_ctx.service.fetch_from_ytdlp(&url, &target_path).await;
         assert!(success, "Should download lyrics directly via yt-dlp");
@@ -172,8 +171,8 @@ fn test_ytdlp_direct_popular(lyrics_ctx: LyricsTestContext) {
 fn test_ytdlp_direct_multi_artist(lyrics_ctx: LyricsTestContext) {
     smol::block_on(async {
         let yt_id = "kTJczUoc26U"; // The Kid LAROI, Justin Bieber - STAY
-        let url = format!("https://www.youtube.com/watch?v={}", yt_id);
-        let target_path = lyrics_ctx.lyrics_dir.join(format!("{}.lrc", yt_id));
+        let url = format!("https://www.youtube.com/watch?v={yt_id}");
+        let target_path = lyrics_ctx.lyrics_dir.join(format!("{yt_id}.lrc"));
 
         let success = lyrics_ctx.service.fetch_from_ytdlp(&url, &target_path).await;
         assert!(success, "Should download lyrics directly via yt-dlp for multi-artist song");
@@ -187,10 +186,10 @@ fn test_ytdlp_direct_complex_titles(lyrics_ctx: LyricsTestContext) {
         let cases = vec![("vqQDp522wQU"), ("VcjzHMhBtf0"), ("RFBDmwFxVr0")]; // Panic! At The Disco - Hey Look Ma, I Made It, Journey - Don't Stop Believin', RUSTAGE - Blood (Alucard Rap)
 
         for yt_id in cases {
-            let url = format!("https://www.youtube.com/watch?v={}", yt_id);
-            let target_path = lyrics_ctx.lyrics_dir.join(format!("{}.lrc", yt_id));
+            let url = format!("https://www.youtube.com/watch?v={yt_id}");
+            let target_path = lyrics_ctx.lyrics_dir.join(format!("{yt_id}.lrc"));
             let success = lyrics_ctx.service.fetch_from_ytdlp(&url, &target_path).await;
-            assert!(success, "Should download lyrics directly via yt-dlp for ID {}", yt_id);
+            assert!(success, "Should download lyrics directly via yt-dlp for ID {yt_id}");
             assert!(target_path.exists());
         }
     });
@@ -235,10 +234,10 @@ fn test_ytdlp_search_complex_titles(lyrics_ctx: LyricsTestContext) {
 
         for (artist, title, yt_id) in cases {
             let (clean_artist, clean_title) = crate::youtube::utils::clean_metadata(artist, title);
-            let query = format!("ytsearch10:{} {} lyrics", clean_artist, clean_title);
-            let target_path = lyrics_ctx.lyrics_dir.join(format!("{}.lrc", yt_id));
+            let query = format!("ytsearch10:{clean_artist} {clean_title} lyrics");
+            let target_path = lyrics_ctx.lyrics_dir.join(format!("{yt_id}.lrc"));
             let success = lyrics_ctx.service.fetch_from_ytdlp(&query, &target_path).await;
-            assert!(success, "Should find and download lyrics via ytsearch10 for {}", title);
+            assert!(success, "Should find and download lyrics via ytsearch10 for {title}");
             assert!(target_path.exists());
         }
     });
@@ -276,7 +275,6 @@ fn test_db_insert_get_track() {
         album: Some("Test Album".to_string()),
         duration: Duration::from_secs(120),
         link: "https://youtube.com/watch?v=test_id".to_string(),
-        streaming_url: None,
         thumbnail_url: None,
         added_at: Utc::now(),
         last_modified_at: Utc::now(),
@@ -372,7 +370,7 @@ fn test_queue_deduplication_and_bulk_add() {
         let mock_client = Arc::new(MockYouTubeClient);
         let queue = Arc::new(RwLock::new(Vec::new()));
         let url_cache = Arc::new(RwLock::new(crate::youtube::cache::ExpiringCache::new(
-            std::num::NonZeroUsize::new(10).unwrap(),
+            std::num::NonZeroUsize::new(10).expect("10 is non-zero"),
         )));
 
         let (sem_tx, sem_rx) = async_channel::bounded::<()>(3);
@@ -387,8 +385,9 @@ fn test_queue_deduplication_and_bulk_add() {
             ..Default::default()
         });
 
-        let metadata_cache =
-            Arc::new(RwLock::new(LruCache::new(std::num::NonZeroUsize::new(10).unwrap())));
+        let metadata_cache = Arc::new(RwLock::new(LruCache::new(
+            std::num::NonZeroUsize::new(10).expect("10 is non-zero"),
+        )));
 
         let service = Arc::new(StreamingService::new(
             event_tx,
@@ -431,7 +430,7 @@ fn test_playback_error_recovery() {
         let mock_client = Arc::new(MockYouTubeClient);
         let queue = Arc::new(RwLock::new(Vec::new()));
         let url_cache = Arc::new(RwLock::new(crate::youtube::cache::ExpiringCache::new(
-            std::num::NonZeroUsize::new(10).unwrap(),
+            std::num::NonZeroUsize::new(10).expect("10 is non-zero"),
         )));
 
         let (sem_tx, sem_rx) = async_channel::bounded::<()>(3);
@@ -444,8 +443,9 @@ fn test_playback_error_recovery() {
             .write()
             .push(Song { file: format!("https://mock.url#id={youtube_id}"), ..Default::default() });
 
-        let metadata_cache =
-            Arc::new(RwLock::new(LruCache::new(std::num::NonZeroUsize::new(10).unwrap())));
+        let metadata_cache = Arc::new(RwLock::new(LruCache::new(
+            std::num::NonZeroUsize::new(10).expect("10 is non-zero"),
+        )));
 
         let service = Arc::new(StreamingService::new(
             event_tx,
@@ -538,6 +538,7 @@ fn test_metadata_refresh() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn test_full_youtube_url_refresh_flow() {
     smol::block_on(async {
         use crate::config::Config;
@@ -578,7 +579,7 @@ fn test_full_youtube_url_refresh_flow() {
             supported_commands: HashSet::new(),
             db_update_start: None,
             app_event_sender: app_tx.clone(),
-            work_sender: work_tx,
+            work_sender: work_tx.clone(),
             client_request_sender: client_tx.clone(),
             needs_render: std::cell::Cell::new(false),
             stickers_to_fetch: std::cell::RefCell::new(HashSet::new()),
@@ -591,6 +592,8 @@ fn test_full_youtube_url_refresh_flow() {
             stickers_supported: StickersSupport::Unsupported,
             input: crate::ui::input::InputManager::default(),
             key_resolver: crate::shared::keys::KeyResolver::new(&config),
+            ytdlp_manager: crate::shared::ytdlp::YtDlpManager::new(work_tx),
+            cached_queue_time_total: Duration::default(),
             youtube_manager: std::sync::Arc::new(
                 crate::youtube::manager::YouTubeManager::new(
                     &std::path::PathBuf::from("/tmp/test_ctx_full_flow.db"),
@@ -619,12 +622,12 @@ fn test_full_youtube_url_refresh_flow() {
 
         // Verify we can find its position for replacement
         // In MPD, pos is the index in the queue
-        assert_eq!(ctx.song_position(found_song.id).unwrap(), 0);
+        assert_eq!(ctx.song_position(found_song.id).expect("Song should be in queue"), 0);
 
         // 4. Verify Refresh Logic (StreamingService)
         let mock_client = Arc::new(MockYouTubeClient);
         let url_cache = Arc::new(RwLock::new(crate::youtube::cache::ExpiringCache::new(
-            std::num::NonZeroUsize::new(10).unwrap(),
+            std::num::NonZeroUsize::new(10).expect("10 is non-zero"),
         )));
 
         let (sem_tx, sem_rx) = async_channel::bounded::<()>(3);
@@ -632,8 +635,9 @@ fn test_full_youtube_url_refresh_flow() {
             let _ = sem_tx.send_blocking(());
         }
 
-        let metadata_cache =
-            Arc::new(RwLock::new(LruCache::new(std::num::NonZeroUsize::new(10).unwrap())));
+        let metadata_cache = Arc::new(RwLock::new(LruCache::new(
+            std::num::NonZeroUsize::new(10).expect("10 is non-zero"),
+        )));
 
         let service = Arc::new(StreamingService::new(
             event_tx,
@@ -671,7 +675,7 @@ fn test_full_youtube_url_refresh_flow() {
                     "New URL should still have the YouTube ID fragment"
                 );
             }
-            other => panic!("Expected QueueUrlReplace event, got {:?}", other),
+            other => panic!("Expected QueueUrlReplace event, got {other:?}"),
         }
     });
 }
@@ -731,6 +735,8 @@ fn test_find_failed_song_correct_priority() {
         stickers_supported: StickersSupport::Unsupported,
         input: crate::ui::input::InputManager::default(),
         key_resolver: crate::shared::keys::KeyResolver::new(&config),
+        ytdlp_manager: crate::shared::ytdlp::YtDlpManager::new(crossbeam::channel::unbounded().0),
+        cached_queue_time_total: Duration::default(),
         youtube_manager: std::sync::Arc::new(
             crate::youtube::manager::YouTubeManager::new(
                 &std::path::PathBuf::from("/tmp/test_ctx_priority.db"),
@@ -797,10 +803,10 @@ fn test_lrc_path_resolution() {
     let lyrics_dir = "/home/user/.lyrics";
 
     // Test YouTube track resolution
-    let mut yt_song = Song::default();
-    yt_song.file = "https://youtube.com/watch?v=abc#id=abc".to_string();
+    let yt_song =
+        Song { file: "https://youtube.com/watch?v=abc#id=abc".to_string(), ..Default::default() };
     let yt_path = if let Some(yt_id) = yt_song.youtube_id() {
-        std::path::PathBuf::from(lyrics_dir).join(format!("{}.lrc", yt_id))
+        std::path::PathBuf::from(lyrics_dir).join(format!("{yt_id}.lrc"))
     } else {
         panic!("Should have youtube_id");
     };
@@ -808,7 +814,8 @@ fn test_lrc_path_resolution() {
 
     // Test local track resolution
     let song_file = "artist/album/song.flac";
-    let local_path = crate::shared::lrc::get_lrc_path(lyrics_dir, song_file).unwrap();
+    let local_path =
+        crate::shared::lrc::get_lrc_path(lyrics_dir, song_file).expect("Should get lrc path");
     assert_eq!(local_path, std::path::PathBuf::from("/home/user/.lyrics/artist/album/song.lrc"));
 }
 
@@ -846,10 +853,141 @@ fn test_thumbnail_download(lyrics_ctx: LyricsTestContext) {
                 assert_eq!(returned_id, youtube_id);
                 assert!(path.exists(), "Thumbnail file should exist");
                 assert!(path.starts_with(&cache_dir), "Thumbnail should be in cache dir");
-                assert_eq!(path.extension().unwrap(), "jpg");
+                assert_eq!(path.extension().expect("path should have extension"), "jpg");
             }
-            Ok(other) => panic!("Unexpected event: {:?}", other),
-            Err(e) => panic!("Channel error: {:?}", e),
+            Ok(other) => panic!("Unexpected event: {other:?}"),
+            Err(e) => panic!("Channel error: {e:?}"),
         }
+    });
+}
+
+#[test]
+fn test_import_library_csv() {
+    smol::block_on(async {
+        use crate::youtube::events::YouTubeEvent;
+        use crate::youtube::import::ImportService;
+        use parking_lot::Mutex;
+        use std::io::Write;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("rmpc_test_import_lib_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+        let csv_path = temp_dir.join("test.csv");
+
+        let mut file = std::fs::File::create(&csv_path).expect("Failed to create CSV file");
+        writeln!(file, "ID vidéo,Song Title,Album Title,Artist Name 1,Artist Name 2").unwrap();
+        writeln!(file, "iqizXvvWnmM,Lumière,Clair Obscur: Expedition 33 (Original Soundtrack),Lorien Testard,Alice Duport-Percier").unwrap();
+        writeln!(
+            file,
+            "Vqc9AqhJ6Xg,歌うたいのバラッド - Uta Utai No Ballad,Mirai Kuso/Utautaino Ballad,aluto,"
+        )
+        .unwrap();
+
+        let (event_tx, event_rx) = async_channel::unbounded::<YouTubeEvent>();
+        let db = Arc::new(Mutex::new(Database::in_memory().expect("DB init failed")));
+        let client = Arc::new(MockYouTubeClient);
+        let (permit_tx, permit_rx) = async_channel::bounded(10);
+        permit_tx.send(()).await.unwrap(); // Allow at least one
+        permit_tx.send(()).await.unwrap();
+
+        let service = Arc::new(ImportService::new(
+            event_tx,
+            db.clone(),
+            MpdAddress::default(),
+            None,
+            permit_tx,
+            permit_rx,
+            client,
+        ));
+
+        service
+            .handle_event(YouTubeEvent::ImportLibrary(csv_path.to_string_lossy().to_string()))
+            .await;
+
+        // Wait for finish
+        let mut finished = false;
+        while let Ok(event) = event_rx.recv().await {
+            if let YouTubeEvent::ImportFinished { success, skipped, failed } = event {
+                assert_eq!(success, 2);
+                assert_eq!(skipped, 0);
+                assert_eq!(failed, 0);
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished, "Import did not finish");
+
+        // Verify DB
+        let db_lock = db.lock();
+        let track1 = db_lock.get_track("iqizXvvWnmM").unwrap().expect("Track 1 missing");
+        assert_eq!(track1.title, "Mock Title"); // Mock client returns "Mock Title"
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
+    });
+}
+
+#[test]
+fn test_import_playlist_folder() {
+    smol::block_on(async {
+        use crate::youtube::events::YouTubeEvent;
+        use crate::youtube::import::ImportService;
+        use parking_lot::Mutex;
+        use std::io::Write;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("rmpc_test_import_pl_{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+
+        let playlists_dir = temp_dir.join("playlists");
+        std::fs::create_dir(&playlists_dir).unwrap();
+
+        let csv_path = playlists_dir.join("playlist-test.csv");
+        let mut file = std::fs::File::create(&csv_path).expect("Failed to create CSV file");
+        writeln!(file, "ID vidéo,Code temporel de création de la vidéo de la playlist").unwrap();
+        writeln!(file, "iqizXvvWnmM,2025-08-08T16:45:33+00:00").unwrap();
+        writeln!(file, "1XYh1K3pQjI,2025-08-08T16:45:43+00:00").unwrap();
+
+        let (event_tx, event_rx) = async_channel::unbounded::<YouTubeEvent>();
+        let db = Arc::new(Mutex::new(Database::in_memory().expect("DB init failed")));
+        let client = Arc::new(MockYouTubeClient);
+        let (permit_tx, permit_rx) = async_channel::bounded(10);
+        for _ in 0..10 {
+            permit_tx.send(()).await.unwrap();
+        }
+
+        let service = Arc::new(ImportService::new(
+            event_tx,
+            db.clone(),
+            MpdAddress::default(),
+            None,
+            permit_tx,
+            permit_rx,
+            client,
+        ));
+
+        service
+            .handle_event(YouTubeEvent::ImportPlaylists(
+                playlists_dir.to_string_lossy().to_string(),
+            ))
+            .await;
+
+        // Wait for LibraryUpdated
+        let mut finished = false;
+        while let Ok(event) = event_rx.recv().await {
+            if let YouTubeEvent::LibraryUpdated = event {
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished, "Playlist import did not finish");
+
+        // Verify DB
+        let db_lock = db.lock();
+        let track1 = db_lock.get_track("iqizXvvWnmM").unwrap().expect("Track 1 missing");
+        let track2 = db_lock.get_track("1XYh1K3pQjI").unwrap().expect("Track 2 missing");
+        assert_eq!(track1.title, "Mock Title");
+        assert_eq!(track2.title, "Mock Title");
+
+        std::fs::remove_dir_all(&temp_dir).unwrap();
     });
 }

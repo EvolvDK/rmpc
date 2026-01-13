@@ -129,8 +129,6 @@ impl DownloadService {
         for track in tracks.iter() {
             log::info!("Starting download for: {}", track.title);
 
-            let url = track.link.clone();
-
             let cache_dir = cache_dir.clone();
 
             // Sanitize filename
@@ -164,15 +162,12 @@ impl DownloadService {
             let filename = format!("{sanitized_artist} - {sanitized_title}");
 
             let track_title = track.title.clone();
+            let youtube_id = track.youtube_id.to_string();
 
             if let Ok(()) = self.permit_rx.recv().await {
                 let res = smol::unblock(move || {
                     let ytdlp = YtDlp::new(cache_dir);
-                    let item = YtDlpItem {
-                        id: youtube_id,
-                        filename,
-                        kind: YtDlpHost::Youtube,
-                    };
+                    let item = YtDlpItem { id: youtube_id, filename, kind: YtDlpHost::Youtube };
 
                     ytdlp.download_single(&item)?;
 

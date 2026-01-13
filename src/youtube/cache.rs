@@ -1,5 +1,5 @@
-use crate::youtube::constants::URL_EXPIRY_BUFFER;
 use crate::youtube::constants::EXPIRE_PARAM;
+use crate::youtube::constants::URL_EXPIRY_BUFFER;
 use lru::LruCache;
 use std::hash::Hash;
 use std::num::NonZeroUsize;

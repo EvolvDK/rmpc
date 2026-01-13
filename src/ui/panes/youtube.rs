@@ -85,8 +85,6 @@ pub struct YoutubePane {
     is_active_pane: bool,
     last_submitted_query: String,
     preview_visible: bool,
-    import_status: Option<String>,
-    import_progress: (usize, usize),
     compiled_filter_regex: Option<Regex>,
     compiled_highlight_regex: Option<Regex>,
 }
@@ -111,18 +109,10 @@ fn move_list_selection(state: &mut ListState, count: usize, delta: isize) {
     let current = state.selected().unwrap_or(0);
     let next = if delta < 0 {
         let abs_delta = delta.unsigned_abs();
-        if current == 0 {
-            count.saturating_sub(1)
-        } else {
-            current.saturating_sub(abs_delta)
-        }
+        if current == 0 { count.saturating_sub(1) } else { current.saturating_sub(abs_delta) }
     } else {
         let abs_delta = delta.unsigned_abs();
-        if current >= count.saturating_sub(1) {
-            0
-        } else {
-            current.saturating_add(abs_delta)
-        }
+        if current >= count.saturating_sub(1) { 0 } else { current.saturating_add(abs_delta) }
     };
     state.select(Some(next));
 }
@@ -135,7 +125,9 @@ fn make_list_item(text: String, is_marked: bool, ctx: &Ctx) -> ListItem<'_> {
             ctx.config.theme.highlighted_item_style,
         ));
     } else {
-        spans.push(ratatui::text::Span::from(" ".repeat(ctx.config.theme.symbols.marker.chars().count())));
+        spans.push(ratatui::text::Span::from(
+            " ".repeat(ctx.config.theme.symbols.marker.chars().count()),
+        ));
     }
     spans.push(ratatui::text::Span::raw(text));
     ListItem::new(Line::from(spans))
@@ -168,8 +160,6 @@ impl YoutubePane {
             is_active_pane: false,
             last_submitted_query: String::new(),
             preview_visible: false,
-            import_status: None,
-            import_progress: (0, 0),
             compiled_filter_regex: None,
             compiled_highlight_regex: None,
         }
@@ -626,8 +616,7 @@ impl YoutubePane {
             return;
         }
 
-        let new_tracks: Vec<_> =
-            tracks.into_iter().filter(|t| !self.is_in_queue(t, ctx)).collect();
+        let new_tracks: Vec<_> = tracks.into_iter().filter(|t| !self.is_in_queue(t, ctx)).collect();
 
         if new_tracks.is_empty() {
             status_info!("All selected tracks already in queue");
@@ -767,7 +756,11 @@ impl YoutubePane {
                             self.marked_items.insert(id);
                         }
                     }
-                    move_list_selection(&mut self.search_list_state, self.filtered_results.len(), 1);
+                    move_list_selection(
+                        &mut self.search_list_state,
+                        self.filtered_results.len(),
+                        1,
+                    );
                 }
             }
             YoutubeFocus::LibraryArtists => {
@@ -802,8 +795,12 @@ impl YoutubePane {
                             }
                         }
                     }
-                    
-                    move_list_selection(&mut self.artists_list_state, self.library_artists.len(), 1);
+
+                    move_list_selection(
+                        &mut self.artists_list_state,
+                        self.library_artists.len(),
+                        1,
+                    );
                     if let Some(next) = self.artists_list_state.selected() {
                         if let Some(artist) = self.library_artists.get(next) {
                             self.update_artist_tracks(ctx, artist.clone());
@@ -862,16 +859,12 @@ impl YoutubePane {
             };
 
         let mode_label = format!("[{mode_label:?}]", mode_label = self.filter_mode);
-        let title = if let Some(status) = &self.import_status {
-            format!(" Search YouTube {mode_label} - {status} ")
-        } else {
-            format!(" Search YouTube {mode_label} (Press '/' to type, CTRL(+ALT)+f to cycle mode) ")
-        };
+        let title = format!(
+            " Search YouTube {mode_label} (Press '/' to type, CTRL(+ALT)+f to cycle mode) "
+        );
 
-        let search_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(search_border_style)
-            .title(title);
+        let search_block =
+            Block::default().borders(Borders::ALL).border_style(search_border_style).title(title);
 
         let area = self.areas[Areas::SearchInput];
         let inner_search_area = search_block.inner(area);
@@ -921,7 +914,9 @@ impl YoutubePane {
                     ctx.config.theme.highlighted_item_style,
                 ));
             } else {
-                spans.push(ratatui::text::Span::from(" ".repeat(ctx.config.theme.symbols.marker.chars().count())));
+                spans.push(ratatui::text::Span::from(
+                    " ".repeat(ctx.config.theme.symbols.marker.chars().count()),
+                ));
             }
 
             if !search_query.is_empty() && search_query != self.last_submitted_query {
@@ -1292,17 +1287,6 @@ impl Pane for YoutubePane {
                         self.all_library_tracks = Arc::clone(tracks);
                         ctx.render()?;
                     }
-                    YouTubeEvent::ImportProgress { current, total, message } => {
-                        self.import_status = Some(message.clone());
-                        self.import_progress = (*current, *total);
-                        ctx.render()?;
-                    }
-                    YouTubeEvent::ImportFinished { success, failed } => {
-                        self.import_status =
-                            Some(format!("Import finished: {success} success, {failed} failed"));
-                        // Clear after some time or on next search/action
-                        ctx.render()?;
-                    }
                     YouTubeEvent::MetadataAvailable(_) => {
                         ctx.render()?;
                     }
@@ -1373,7 +1357,11 @@ impl Pane for YoutubePane {
             } else if self.areas[Areas::SearchTable].contains(event.into()) {
                 self.is_active_pane = true;
                 self.focus = YoutubeFocus::SearchTable;
-                if let Some(idx) = self.get_clicked_row(self.areas[Areas::SearchTable], event.y, &self.search_list_state) {
+                if let Some(idx) = self.get_clicked_row(
+                    self.areas[Areas::SearchTable],
+                    event.y,
+                    &self.search_list_state,
+                ) {
                     if idx < self.filtered_results.len() {
                         self.search_list_state.select(Some(idx));
                         ctx.render()?;
@@ -1385,7 +1373,11 @@ impl Pane for YoutubePane {
             } else if self.areas[Areas::Artists].contains(event.into()) {
                 self.is_active_pane = true;
                 self.focus = YoutubeFocus::LibraryArtists;
-                if let Some(idx) = self.get_clicked_row(self.areas[Areas::Artists], event.y, &self.artists_list_state) {
+                if let Some(idx) = self.get_clicked_row(
+                    self.areas[Areas::Artists],
+                    event.y,
+                    &self.artists_list_state,
+                ) {
                     if idx < self.library_artists.len() {
                         self.artists_list_state.select(Some(idx));
                         if let Some(artist) = self.library_artists.get(idx) {
@@ -1400,7 +1392,11 @@ impl Pane for YoutubePane {
             } else if self.areas[Areas::Tracks].contains(event.into()) {
                 self.is_active_pane = true;
                 self.focus = YoutubeFocus::LibraryTracks;
-                if let Some(idx) = self.get_clicked_row(self.areas[Areas::Tracks], event.y, &self.tracks_list_state) {
+                if let Some(idx) = self.get_clicked_row(
+                    self.areas[Areas::Tracks],
+                    event.y,
+                    &self.tracks_list_state,
+                ) {
                     if idx < self.library_tracks.len() {
                         self.tracks_list_state.select(Some(idx));
                         ctx.render()?;

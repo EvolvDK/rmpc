@@ -15,7 +15,6 @@ use crate::youtube::ytdlp::YtdlpAdapter;
 use crate::mpd::commands::Song;
 
 use crate::config::{MpdAddress, address::MpdPassword};
-use anyhow::Context;
 use async_channel::{Receiver, Sender, bounded};
 use lru::LruCache;
 use parking_lot::{Mutex, RwLock};
@@ -31,16 +30,13 @@ pub struct YouTubeManager {
     event_rx: Receiver<YouTubeEvent>,
     pub db: Arc<Mutex<Database>>,
     metadata_cache: Arc<RwLock<LruCache<YouTubeId, YouTubeTrack>>>,
-    pub(crate) url_cache: Arc<RwLock<ExpiringCache<YouTubeId, String>>>,
-    permit_tx: Sender<()>,
-    permit_rx: Receiver<()>,
     tasks: Arc<Mutex<Vec<smol::Task<()>>>>,
 
     // Services for direct addressing
     search: Arc<SearchService<YtdlpAdapter>>,
     metadata: Arc<MetadataService<YtdlpAdapter>>,
     streaming: Arc<StreamingService<YtdlpAdapter>>,
-    import: Arc<crate::youtube::import::ImportService>,
+    import: Arc<crate::youtube::import::ImportService<YtdlpAdapter>>,
     download: Arc<crate::youtube::download::DownloadService>,
 }
 
@@ -103,6 +99,7 @@ impl YouTubeManager {
             password.clone(),
             permit_tx.clone(),
             permit_rx.clone(),
+            client.clone(),
         ));
         let download = Arc::new(crate::youtube::download::DownloadService::new(
             event_tx.clone(),
@@ -122,9 +119,6 @@ impl YouTubeManager {
             event_rx,
             db,
             metadata_cache,
-            url_cache,
-            permit_tx,
-            permit_rx,
             tasks: Arc::new(Mutex::new(Vec::new())),
             search,
             metadata,
@@ -250,43 +244,11 @@ impl YouTubeManager {
         }
     }
 
+    pub async fn resolve_stream_url(&self, youtube_id: &str) -> Result<String> {
+        self.streaming.get_streaming_url(&YouTubeId::new(youtube_id)).await
+    }
+
     pub fn list_library_tracks(&self) -> Result<Vec<YouTubeTrack>> {
         self.db.lock().list_tracks()
-    }
-
-    pub fn get_cached_url(&self, youtube_id: &YouTubeId) -> Option<String> {
-        self.url_cache.write().get(youtube_id).cloned()
-    }
-
-    pub async fn resolve_url(&self, youtube_id: &YouTubeId) -> Result<String> {
-        if let Some(url) = self.get_cached_url(youtube_id) {
-            return Ok(url);
-        }
-
-        if let Ok(()) = self.permit_rx.recv().await {
-            let res = YtdlpAdapter::get_streaming_url(youtube_id.as_str())
-                .await
-                .context(format!("Failed to resolve YouTube URL for {youtube_id}"));
-
-            if let Ok(url) = &res {
-                self.url_cache.write().put(youtube_id.clone(), url.clone());
-            }
-
-            let _ = self.permit_tx.send(()).await;
-            res.map_err(crate::youtube::error::YouTubeError::from)
-        } else {
-            Err(crate::youtube::error::YouTubeError::Anyhow(anyhow::anyhow!(
-                "Failed to acquire permit for yt-dlp"
-            )))
-        }
-    }
-}
-
-impl Drop for YouTubeManager {
-    fn drop(&mut self) {
-        let mut tasks = self.tasks.lock();
-        for task in tasks.drain(..) {
-            let _ = smol::future::block_on(task.cancel());
-        }
     }
 }

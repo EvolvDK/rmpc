@@ -183,6 +183,7 @@ impl Modal for DownloadsModal {
                 ctx.render()?;
             }
             MouseEventKind::Drag { drag_start_position: _ } => {}
+            MouseEventKind::Release => {}
         }
         Ok(())
     }
@@ -329,6 +330,10 @@ impl DownloadState {
 impl DirStackItem for DownloadId {
     fn as_path(&self) -> &'static str {
         ""
+    }
+
+    fn as_song(&self) -> Option<&crate::mpd::commands::Song> {
+        None
     }
 
     fn is_file(&self) -> bool {

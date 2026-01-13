@@ -6,22 +6,13 @@ use std::collections::HashMap;
 use super::theme::{Modifiers, ScrollbarConfigFile, StyleFile, properties::SongPropertyFile};
 use crate::config::{
     tabs::{
-        BorderTitlePosition,
-        BordersFile,
-        DirectionFile,
-        PaneOrSplitFile,
-        PaneTypeFile,
-        SubPaneFile,
-        VolumeTypeFile,
+        BorderTitlePosition, BordersFile, DirectionFile, PaneOrSplitFile, PaneTypeFile,
+        SubPaneFile, VolumeTypeFile,
     },
     theme::{
         borders::BorderSymbolsFile,
         properties::{
-            Alignment,
-            PropertyFile,
-            PropertyKindFile,
-            PropertyKindFileOrText,
-            StatusPropertyFile,
+            Alignment, PropertyFile, PropertyKindFile, PropertyKindFileOrText, StatusPropertyFile,
         },
         volume_slider::VolumeSliderConfigFile,
     },
@@ -367,95 +358,98 @@ pub fn components() -> HashMap<String, PaneOrSplitFile> {
                 ],
             }),
         ),
-        ("volume".to_string(), PaneOrSplitFile::Split {
-            direction: DirectionFile::Horizontal,
-            borders: BordersFile::NONE,
-            panes: vec![
-                SubPaneFile {
-                    size: "1".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Pane(PaneTypeFile::Property {
-                        align: Alignment::Left,
-                        scroll_speed: 0,
-                        content: vec![PropertyFile {
-                            kind: PropertyKindFileOrText::Text(String::new()),
-                            style: None,
-                            default: None,
-                        }],
-                    }),
-                },
-                SubPaneFile {
-                    size: "100%".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Pane(PaneTypeFile::Volume {
-                        kind: VolumeTypeFile::Slider(VolumeSliderConfigFile {
-                            symbols: crate::config::theme::volume_slider::Symbols {
-                                start: None,
-                                filled: "─".to_string(),
-                                thumb: "●".to_string(),
-                                track: "─".to_string(),
-                                end: None,
-                            },
-                            track_style: None,
-                            filled_style: None,
-                            thumb_style: None,
+        (
+            "volume".to_string(),
+            PaneOrSplitFile::Split {
+                direction: DirectionFile::Horizontal,
+                borders: BordersFile::NONE,
+                panes: vec![
+                    SubPaneFile {
+                        size: "1".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Pane(PaneTypeFile::Property {
+                            align: Alignment::Left,
+                            scroll_speed: 0,
+                            content: vec![PropertyFile {
+                                kind: PropertyKindFileOrText::Text(String::new()),
+                                style: None,
+                                default: None,
+                            }],
                         }),
-                    }),
-                },
-                SubPaneFile {
-                    size: "3".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Pane(PaneTypeFile::Property {
-                        align: Alignment::Right,
-                        scroll_speed: 0,
-                        content: vec![PropertyFile {
-                            kind: PropertyKindFileOrText::Property(PropertyKindFile::Status(
-                                StatusPropertyFile::Volume,
-                            )),
-                            style: Some(StyleFile {
-                                fg: Some("blue".to_string()),
-                                bg: None,
-                                modifiers: None,
+                    },
+                    SubPaneFile {
+                        size: "100%".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Pane(PaneTypeFile::Volume {
+                            kind: VolumeTypeFile::Slider(VolumeSliderConfigFile {
+                                symbols: crate::config::theme::volume_slider::Symbols {
+                                    start: None,
+                                    filled: "─".to_string(),
+                                    thumb: "●".to_string(),
+                                    track: "─".to_string(),
+                                    end: None,
+                                },
+                                track_style: None,
+                                filled_style: None,
+                                thumb_style: None,
                             }),
-                            default: None,
-                        }],
-                    }),
-                },
-                SubPaneFile {
-                    size: "2".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Pane(PaneTypeFile::Property {
-                        align: Alignment::Left,
-                        scroll_speed: 0,
-                        content: vec![PropertyFile {
-                            kind: PropertyKindFileOrText::Text("%".to_string()),
-                            style: Some(StyleFile {
-                                fg: Some("blue".to_string()),
-                                bg: None,
-                                modifiers: None,
-                            }),
-                            default: None,
-                        }],
-                    }),
-                },
-            ],
-        }),
+                        }),
+                    },
+                    SubPaneFile {
+                        size: "3".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Pane(PaneTypeFile::Property {
+                            align: Alignment::Right,
+                            scroll_speed: 0,
+                            content: vec![PropertyFile {
+                                kind: PropertyKindFileOrText::Property(PropertyKindFile::Status(
+                                    StatusPropertyFile::Volume,
+                                )),
+                                style: Some(StyleFile {
+                                    fg: Some("blue".to_string()),
+                                    bg: None,
+                                    modifiers: None,
+                                }),
+                                default: None,
+                            }],
+                        }),
+                    },
+                    SubPaneFile {
+                        size: "2".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Pane(PaneTypeFile::Property {
+                            align: Alignment::Left,
+                            scroll_speed: 0,
+                            content: vec![PropertyFile {
+                                kind: PropertyKindFileOrText::Text("%".to_string()),
+                                style: Some(StyleFile {
+                                    fg: Some("blue".to_string()),
+                                    bg: None,
+                                    modifiers: None,
+                                }),
+                                default: None,
+                            }],
+                        }),
+                    },
+                ],
+            },
+        ),
         (
             "states".to_string(),
             PaneOrSplitFile::Pane(PaneTypeFile::Property {
@@ -575,78 +569,87 @@ pub fn components() -> HashMap<String, PaneOrSplitFile> {
                 ],
             }),
         ),
-        ("header_left".to_string(), PaneOrSplitFile::Split {
-            direction: DirectionFile::Vertical,
-            borders: BordersFile::NONE,
-            panes: vec![
-                SubPaneFile {
-                    size: "1".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Component("state".to_string()),
-                },
-                SubPaneFile {
-                    size: "1".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Component("elapsed_and_bitrate".to_string()),
-                },
-            ],
-        }),
-        ("header_center".to_string(), PaneOrSplitFile::Split {
-            direction: DirectionFile::Vertical,
-            borders: BordersFile::NONE,
-            panes: vec![
-                SubPaneFile {
-                    size: "1".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Component("title".to_string()),
-                },
-                SubPaneFile {
-                    size: "1".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Component("artist_and_album".to_string()),
-                },
-            ],
-        }),
-        ("header_right".to_string(), PaneOrSplitFile::Split {
-            direction: DirectionFile::Vertical,
-            borders: BordersFile::NONE,
-            panes: vec![
-                SubPaneFile {
-                    size: "1".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Component("volume".to_string()),
-                },
-                SubPaneFile {
-                    size: "1".to_string(),
-                    borders: BordersFile::NONE,
-                    border_title: Vec::new(),
-                    border_title_position: BorderTitlePosition::Top,
-                    border_title_alignment: Alignment::Left,
-                    border_symbols: BorderSymbolsFile::default(),
-                    pane: PaneOrSplitFile::Component("states".to_string()),
-                },
-            ],
-        }),
+        (
+            "header_left".to_string(),
+            PaneOrSplitFile::Split {
+                direction: DirectionFile::Vertical,
+                borders: BordersFile::NONE,
+                panes: vec![
+                    SubPaneFile {
+                        size: "1".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Component("state".to_string()),
+                    },
+                    SubPaneFile {
+                        size: "1".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Component("elapsed_and_bitrate".to_string()),
+                    },
+                ],
+            },
+        ),
+        (
+            "header_center".to_string(),
+            PaneOrSplitFile::Split {
+                direction: DirectionFile::Vertical,
+                borders: BordersFile::NONE,
+                panes: vec![
+                    SubPaneFile {
+                        size: "1".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Component("title".to_string()),
+                    },
+                    SubPaneFile {
+                        size: "1".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Component("artist_and_album".to_string()),
+                    },
+                ],
+            },
+        ),
+        (
+            "header_right".to_string(),
+            PaneOrSplitFile::Split {
+                direction: DirectionFile::Vertical,
+                borders: BordersFile::NONE,
+                panes: vec![
+                    SubPaneFile {
+                        size: "1".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Component("volume".to_string()),
+                    },
+                    SubPaneFile {
+                        size: "1".to_string(),
+                        borders: BordersFile::NONE,
+                        border_title: Vec::new(),
+                        border_title_position: BorderTitlePosition::Top,
+                        border_title_alignment: Alignment::Left,
+                        border_symbols: BorderSymbolsFile::default(),
+                        pane: PaneOrSplitFile::Component("states".to_string()),
+                    },
+                ],
+            },
+        ),
     ])
 }
 

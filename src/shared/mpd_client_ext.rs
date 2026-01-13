@@ -17,8 +17,11 @@ use crate::{
         mpd_client::{Filter, FilterKind, MpdClient, MpdCommand, SingleOrRange, Tag},
         proto_client::ProtoClient,
     },
-    shared::macros::{status_info, status_warn},
-    youtube::models::YouTubeId,
+    shared::{
+        events::ClientRequest,
+        macros::{status_info, status_warn},
+    },
+    youtube::models::{YouTubeId, extract_youtube_id},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -72,64 +75,66 @@ pub trait MpdClientExt {
         };
         let replace = matches!(position, Position::Replace);
 
-        let has_youtube = items.iter().any(|item| item.is_youtube());
+        let needs_resolution = items.iter().any(|item| {
+            if let Enqueue::File { path } = item {
+                extract_youtube_id(path).is_some()
+            } else {
+                false
+            }
+        });
 
-        if !has_youtube {
-            ctx.command(move |client| {
-                client.enqueue_multiple(items, autoplay_idx, queue_position, replace)?;
-                Ok(())
-            });
+        if needs_resolution {
+            let youtube_manager = ctx.youtube_manager.clone();
+            let client_request_sender = ctx.client_request_sender.clone();
+
+            smol::spawn(async move {
+                let mut resolved_items = Vec::with_capacity(items.len());
+                for item in items {
+                    if let Enqueue::File { path } = &item {
+                        if let Some(id_str) = extract_youtube_id(path) {
+                            match youtube_manager.resolve_stream_url(id_str).await {
+                                Ok(url) => {
+                                    let id = YouTubeId::new(id_str);
+                                    let full_url = id.append_to_url(&url);
+                                    resolved_items.push(Enqueue::File { path: full_url });
+                                    continue;
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to resolve YouTube URL for {id_str}: {e}");
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    resolved_items.push(item);
+                }
+
+                if resolved_items.is_empty() {
+                    return;
+                }
+
+                let _ = client_request_sender.send(ClientRequest::Command(
+                    crate::shared::mpd_query::MpdCommand {
+                        callback: Box::new(move |client| {
+                            client.enqueue_multiple(
+                                resolved_items,
+                                autoplay_idx,
+                                queue_position,
+                                replace,
+                            )?;
+                            Ok(())
+                        }),
+                    },
+                ));
+            })
+            .detach();
             return;
         }
 
-        let youtube_manager = Arc::clone(&ctx.youtube_manager);
-        let client_request_sender = ctx.client_request_sender.clone();
-
-        smol::spawn(async move {
-            let mut resolved_items = Vec::with_capacity(items.len());
-            for item in items {
-                if item.is_youtube() {
-                    match item {
-                        Enqueue::File { path } => {
-                            if let Some(youtube_id) =
-                                crate::youtube::models::YouTubeId::from_url(&path)
-                            {
-                                match youtube_manager.resolve_url(&youtube_id).await {
-                                    Ok(url) => {
-                                        resolved_items.push(Enqueue::File {
-                                            path: youtube_id.append_to_url(&url),
-                                        });
-                                        continue;
-                                    }
-                                    Err(e) => {
-                                        log::error!("{e:?}");
-                                    }
-                                }
-                            }
-                            resolved_items.push(Enqueue::File { path });
-                        }
-                        _ => resolved_items.push(item),
-                    }
-                } else {
-                    resolved_items.push(item);
-                }
-            }
-
-            let _ = client_request_sender.send(crate::shared::events::ClientRequest::Command(
-                crate::shared::mpd_query::MpdCommand {
-                    callback: Box::new(move |client| {
-                        client.enqueue_multiple(
-                            resolved_items,
-                            autoplay_idx,
-                            queue_position,
-                            replace,
-                        )?;
-                        Ok(())
-                    }),
-                },
-            ));
-        })
-        .detach();
+        ctx.command(move |client| {
+            client.enqueue_multiple(items, autoplay_idx, queue_position, replace)?;
+            Ok(())
+        });
     }
     fn play_position_safe(&mut self, queue_len: usize) -> Result<(), MpdError>;
     fn enqueue_multiple(
@@ -185,16 +190,7 @@ pub enum Enqueue {
     Find { filter: Vec<(Tag, FilterKind, String)> },
 }
 
-impl Enqueue {
-    pub fn is_youtube(&self) -> bool {
-        match self {
-            Enqueue::File { path } => {
-                path.contains("videoplayback") || path.contains("googlevideo.com")
-            }
-            _ => false,
-        }
-    }
-}
+impl Enqueue {}
 
 impl<T: MpdClient + MpdCommand + ProtoClient> MpdClientExt for T {
     fn play_position_safe(&mut self, queue_len: usize) -> Result<(), MpdError> {

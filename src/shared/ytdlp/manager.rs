@@ -10,8 +10,7 @@ use crate::{
         id::{self, Id},
         macros::{status_error, status_info},
         ytdlp::{
-            YtDlpDownloadError,
-            YtDlpDownloadResult,
+            YtDlpDownloadError, YtDlpDownloadResult,
             error::YtDlpParseError,
             ytdlp_item::{YtDlpContent, YtDlpItem},
         },
@@ -147,11 +146,10 @@ impl YtDlpManager {
     }
 
     pub fn queue_download(&self, item: YtDlpItem, position: Option<QueuePosition>) {
-        self.queue.borrow_mut().insert(DownloadId::new(), QueuedYtDlpItem {
-            state: DownloadState::Queued,
-            add_position: position,
-            inner: item,
-        });
+        self.queue.borrow_mut().insert(
+            DownloadId::new(),
+            QueuedYtDlpItem { state: DownloadState::Queued, add_position: position, inner: item },
+        );
     }
 
     pub fn queue_download_many(&self, items: Vec<YtDlpItem>) {
